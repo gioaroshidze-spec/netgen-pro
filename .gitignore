@@ -1,0 +1,18 @@
+# Python
+backend/venv/
+backend/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node / React (For later)
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# OS Files
+.DS_Store
+
+# Environment Variables (Never commit passwords/API keys!)
+.env
