@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import models, schemas
 from database import engine, SessionLocal
@@ -11,6 +12,17 @@ app = FastAPI(
     description="Backend engine for network Management System",
     version="1.0.0"
 )
+
+# --- CORS CONFIGURATION ---
+# This allows your React frontend to securely talk to the FastAPI backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # React's address
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all standard methods (GET, POST, etc.)
+    allow_headers=["*"],
+)
+
 
 # --- DATABASE DEPENDENCY ---
 # This function opens a connection to the DB for every request, the safely closes it
