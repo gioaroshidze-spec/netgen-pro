@@ -16,3 +16,7 @@ frontend/build/
 
 # Environment Variables (Never commit passwords/API keys!)
 .env
+# Databases
+*.db
+*.sqlite3
+netgen.db
