@@ -50,3 +50,35 @@ def get_devices(db: Session = Depends(get_db)):
     #Query the database for all NetworkDevice records
     devices = db.query(models.NetworkDevice).all()
     return devices
+
+# 3. Update an existing device (PUT)
+@app.put("/devices/{device_id}", response_model=schemas.DeviceResponse)
+def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Session = Depends(get_db)):
+    # Find the device in the database
+    db_device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+
+    # If it doesn't exist, throw a 404 error
+    if db_device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Update only the fields the user actually sent us
+    update_data = device_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_device, key, value)
+
+    db.commit()
+    db.refresh(db_device)
+    return db_device
+
+# 4. Delete a device (DELETE)
+@app.delete("/devices/{device_id}")
+def delete_device(device_id: int, db: Session = Depends(get_db)):
+    # Find the device in the database
+    db_device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+
+    if db_device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    db.delete(db_device)
+    db.commit()
+    return {"message": f"Device {device_id} successfully deleted"}

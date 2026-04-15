@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 # This is the shape of the data we EXPECT the user to send us
 class DeviceCreate(BaseModel):
@@ -14,3 +15,8 @@ class DeviceResponse(DeviceCreate):
 
     class Config:
         from_attributes = True
+class DeviceUpdate(BaseModel):
+    hostname: Optional[str] = None
+    ip_address: Optional[str] = None
+    device_type: Optional[str] = None
+    username: Optional[str] = None
