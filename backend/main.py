@@ -1,4 +1,9 @@
 from fastapi import FastAPI
+import models
+from database import engine
+
+# This is the magic line that creates the netgen.db file and tables
+models.Base.metadata.create_all(bind=engine)
 
 #Initialise the FastAPI app
 app = FastAPI(
