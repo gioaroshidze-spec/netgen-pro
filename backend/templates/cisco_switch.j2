@@ -1,0 +1,19 @@
+! Base Cisco Switch Configuration
+hostname {{ hostname }}
+!
+spanning-tree mode rapid-pvst
+!
+{% for vlan in vlans %}
+vlan {{ vlan.id }}
+ name {{ vlan.name }}
+!
+{% endfor %}
+!
+interface Vlan1
+ description Management
+ ip address {{ management_ip }} 255.255.255.0
+ no shutdown
+!
+ip default-gateway {{ default_gateway }}
+!
+end

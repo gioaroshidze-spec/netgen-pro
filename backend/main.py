@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import subprocess
+import jinja2
 import models, schemas
 from database import engine, SessionLocal
 
@@ -33,6 +34,10 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# --- JINJA2 CONFIGURATION ---
+template_loader = jinja2.FileSystemLoader(searchpath="./templates")
+template_env = jinja2.Environment(loader=template_loader)
 
 # --- API ENDPOINT ---
 
@@ -135,3 +140,18 @@ def get_network_map(db: Session = Depends(get_db)):
             "status": status
         })
     return mapped_devices
+
+# 6. Switch Configuration Generator (POST)
+@app.post("/generate-config/")
+def generate_config(request: schemas.SwitchConfigRequest):
+    try:
+        template = template_env.get_template("cisco_switch.j2")
+        rendered_config = template.render(
+            hostname=request.hostname,
+            management_ip=request.management_ip,
+            default_gateway=request.default_gateway,
+            vlans=[vlan.model_dump() for vlan in request.vlans]
+        )
+        return {"status": "success", "config": rendered_config}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

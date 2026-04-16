@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 
+# --- DEVICE CRUD SCHEMAS ---
 # This is the shape of the data we EXPECT the user to send us
 class DeviceCreate(BaseModel):
     hostname: str
@@ -20,3 +21,15 @@ class DeviceUpdate(BaseModel):
     ip_address: Optional[str] = None
     device_type: Optional[str] = None
     username: Optional[str] = None
+
+# --- CONFIG GENERATOR SCHEMAS ---
+
+class VlanConfig(BaseModel):
+    id: int
+    name: str
+
+class SwitchConfigRequest(BaseModel):
+    hostname: str
+    management_ip: str
+    default_gateway: str
+    vlans: list[VlanConfig]
