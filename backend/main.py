@@ -53,6 +53,7 @@ def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db)):
         hostname=device.hostname,
         ip_address=device.ip_address,
         device_type=device.device_type,
+        os_type=device.os_type,
         username=device.username
     )
 
@@ -70,7 +71,7 @@ def get_devices(db: Session = Depends(get_db)):
     return devices
 
 # 3. Update an existing device (PUT)
-@app.put("/devices/{device_id}", response_model=schemas.DeviceResponse)
+@app.put("/device/{device_id}", response_model=schemas.DeviceResponse)
 def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Session = Depends(get_db)):
     # Find the device in the database
     db_device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
@@ -89,7 +90,7 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
     return db_device
 
 # 4. Delete a device (DELETE)
-@app.delete("/devices/{device_id}")
+@app.delete("/device/{device_id}")
 def delete_device(device_id: int, db: Session = Depends(get_db)):
     # Find the device in the database
     db_device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()

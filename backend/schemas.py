@@ -7,6 +7,7 @@ class DeviceCreate(BaseModel):
     hostname: str
     ip_address: str
     device_type: str
+    os_type: str
     username: str
 
 # This is the shape of the data we RETURN to the user
@@ -20,6 +21,7 @@ class DeviceUpdate(BaseModel):
     hostname: Optional[str] = None
     ip_address: Optional[str] = None
     device_type: Optional[str] = None
+    os_type: Optional[str] = None
     username: Optional[str] = None
 
 # --- CONFIG GENERATOR SCHEMAS ---
