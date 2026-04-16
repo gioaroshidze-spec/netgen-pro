@@ -35,3 +35,13 @@ class SwitchConfigRequest(BaseModel):
     management_ip: str
     default_gateway: str
     vlans: list[VlanConfig]
+
+# --- BACKUP REQUESTS ---
+class BackupOptions(BaseModel):
+    save_nvram: bool
+    save_flash: bool
+    download_local: bool
+
+class BulkBackupRequest(BaseModel):
+    device_ids: list[int]
+    options: BackupOptions

@@ -2,9 +2,13 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import subprocess
+from netmiko import ConnectHandler
 import jinja2
 import models, schemas
 from database import engine, SessionLocal
+import io
+import zipfile
+from fastapi.responses import StreamingResponse
 
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
@@ -156,3 +160,94 @@ def generate_config(request: schemas.SwitchConfigRequest):
         return {"status": "success", "config": rendered_config}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+# 7. Netmiko SSH connection  single backup(POST)
+@app.post("/backup-device/{device_id}")
+def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db)):
+    
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    connection_params = {
+        'device_type': 'cisco_ios',
+        'host': device.ip_address,
+        'username': device.username,
+        'password': 'Werfds123'
+    }
+
+    try:
+        with ConnectHandler(**connection_params) as net_connect:
+            net_connect.enable()
+            config_data = ""
+
+            # Action 1: Write to NVRAM
+            if options.save_nvram:
+                net_connect.save_config()
+
+            # Action 2: Save to Flash Overwriting the old one
+            if options.save_flash:
+                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
+                net_connect.send_command_timing("\n") # Press enter to confirm destination filename
+
+            # Action 3: Download to Local (Scrub the garbage lines)
+            if options.download_local:
+                raw_config = net_connect.send_command("show running-config")
+                # Clean out the "Building Configuration..." lines os Ansible doesn't fail later
+                clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
+                config_data = "\n".join(clean_lines)
+        
+        return {"hostname": device.hostname, "config": config_data}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
+    
+
+# 8. Bulk Backup (POST)
+@app.post("/bulk-backup")
+def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db)):
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for dev_id in request.device_ids:
+            device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == dev_id).first()
+            if device:
+                connection_params = {
+                    'device_type': 'cisco_ios',
+                    "host": device.ip_address,
+                    'username': device.username,
+                    'password': 'Werfds123'
+                }
+                try:
+                    with ConnectHandler(**connection_params) as net_connect:
+                        net_connect.enable()
+
+                        if request.options.save_nvram:
+                            net_connect.save_config()
+                        
+                        if request.options.save_flash:
+                            net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
+                            net_connect.send_command_timing("\n")
+                        
+                        if request.options.download_local:
+                            raw_config = net_connect.send_command("show running-config")
+                            clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
+                            config = "\n".join(clean_lines)
+                            # Filename format will be strictly handled here or on the frontend
+                            zip_file.writestr(f"{device.hostname}_backup.txt", config)
+                except Exception as e:
+                    if request.options.download_local:
+                        zip_file.writestr(f"{device.hostname}_ERROR.txt", f"Failed: {str(e)}")
+
+    zip_buffer.seek(0)
+
+    # If they only saved to NVRAM/Flash and didn't want a zip file downloaded:
+    if not request.options.download_local:
+        return {"message": "Backup completed successfully on devices."}
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=VNMS_Bulk_Backup.zip"}
+    )
