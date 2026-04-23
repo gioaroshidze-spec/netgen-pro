@@ -188,7 +188,7 @@ function App() {
     .catch(err => { console.error(err); alert(`Error: ${err.message}`); setIsBulkBackingUp(false); });
   }
 
-  const handleRestore = () => {
+const handleRestore = () => {
     if (!maintRestoreFile) return alert("Please upload a configuration file first.");
     const selectedHostnames = [...maintRestoreSwitches, ...maintRestoreRouters];
     if (selectedHostnames.length === 0) return alert("Please select target devices.");
@@ -197,26 +197,28 @@ function App() {
     const targetIds = selectedHostnames.map(h => devices.find(d => d.hostname === h).id);
     setIsRestoring(true);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const fileContent = e.target.result;
-      fetch(`${API_URL.replace('/device/', '/restore-devices/')}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_ids: targetIds, config_content: fileContent })
-      })
-      .then(res => res.json())
-      .then(data => {
-        alert("Restore process completed! Check your browser console for detailed logs.");
-        console.log("RESTORE RESULTS:", data.details);
-        setIsRestoring(false);
-        setMaintRestoreFile(null);
-        setMaintRestoreSwitches([]);
-        setMaintRestoreRouters([]);
-      })
-      .catch(err => { console.error(err); alert("Restore failed."); setIsRestoring(false); });
-    };
-    reader.readAsText(maintRestoreFile);
+    // Using FormData allows us to securely send binary files (like .zip) to Python
+    const formData = new FormData();
+    formData.append("file", maintRestoreFile);
+    formData.append("device_ids", JSON.stringify(targetIds));
+
+    fetch(`${API_URL.replace('/device/', '/restore-devices/')}`, {
+      method: 'POST',
+      body: formData // The browser automatically sets Content-Type to multipart/form-data
+    })
+    .then(async res => {
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Restore failed"); }
+      return res.json();
+    })
+    .then(data => {
+      alert("Restore process completed! Check your browser console for detailed logs.");
+      console.log("RESTORE LOGS:\n", data.logs);
+      setIsRestoring(false);
+      setMaintRestoreFile(null);
+      setMaintRestoreSwitches([]);
+      setMaintRestoreRouters([]);
+    })
+    .catch(err => { console.error(err); alert("Restore failed. Check console."); setIsRestoring(false); });
   }
 
   // --- SORTING & FILTERING LOGIC ---
