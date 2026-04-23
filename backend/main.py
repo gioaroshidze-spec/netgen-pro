@@ -317,13 +317,20 @@ async def restore_device(file: UploadFile = File(...), device_ids: str = Form(..
         playbook_path = os.path.join(tmpdir, "restore.yml")
         playbook_content = """
 ---
-- name: VNMS Full Configuration Restore
+- name: VNMS Full Configuration Restore via SCP
   hosts: targets
   gather_facts: no
   tasks:
-    - name: Push Configuration to Target
-      cisco.ios.ios_config:
+    - name: 1. Securely Transfer Backup File to Switch Flash
+      ansible.netcommon.net_put:
         src: "{{ restore_file }}"
+        dest: "flash:vnms_restore.cfg"
+        protocol: scp
+
+    - name: 2. Force Configuration Replace (Wipe and Mirror)
+      cisco.ios.ios_command:
+        commands:
+          - command: 'configure replace flash:vnms_restore.cfg force'
 """
         with open(playbook_path, "w") as pb:
             pb.write(playbook_content)
