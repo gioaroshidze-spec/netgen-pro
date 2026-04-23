@@ -107,6 +107,7 @@ function App() {
   }
 
   // --- MAINTENANCE API FUNCTIONS ---
+  // --- MAINTENANCE API FUNCTIONS ---
   const handleSingleBackup = () => {
     if (!maintSingleDevice) return alert("Please select a device from the dropdown first.");
     if (!backupDestNVRAM && !backupDestFlash && !backupDestLocal) return alert("Please select at least one backup destination.");
@@ -129,9 +130,18 @@ function App() {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        // Strictly Format: Prefix_Hostname_YYYYMMDD_HHMMSS.txt
-        const prefix = maintBackupName ? maintBackupName : 'Single';
-        a.download = `${prefix}_${data.hostname}_${getTimestamp()}.txt`;
+        
+        // --- NEW: Use the strict multi-vendor filename from Python ---
+        // data.filename looks like: Backup_cisco_switch_cctv_sw1_20260423_143000.txt
+        let finalFilename = data.filename; 
+        
+        // If the user typed a custom prefix, replace the default "Backup_" with their prefix
+        if (maintBackupName) {
+            finalFilename = finalFilename.replace("Backup_", `${maintBackupName}_`);
+        }
+        
+        a.download = finalFilename;
+        
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);

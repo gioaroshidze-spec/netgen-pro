@@ -14,6 +14,7 @@ import subprocess
 import json
 import jinja2
 import asyncio
+from datetime import datetime
 
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
@@ -202,8 +203,21 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
                 # Clean out the "Building Configuration..." lines os Ansible doesn't fail later
                 clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                 config_data = "\n".join(clean_lines)
+
+        # --- NEW: Generate Strict Multi-Vendor Filename ---
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Add fallbacks just in case the DB has null values
+        os_type = device.os_type or "UnknownOS"
+        dev_type = device.device_type or "UnknownDevice"
         
-        return {"hostname": device.hostname, "config": config_data}
+        strict_filename = f"Backup_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+        
+        # We now return the filename to the frontend so React knows what to name the file!
+        return {
+            "hostname": device.hostname, 
+            "config": config_data, 
+            "filename": strict_filename
+        }
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
@@ -239,8 +253,15 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
                             raw_config = net_connect.send_command("show running-config")
                             clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                             config = "\n".join(clean_lines)
-                            # Filename format will be strictly handled here or on the frontend
-                            zip_file.writestr(f"{device.hostname}_backup.txt", config)
+                            
+                            # --- NEW: Generate Strict Multi-Vendor Filename inside ZIP ---
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            os_type = device.os_type or "UnknownOS"
+                            dev_type = device.device_type or "UnknownDevice"
+                            
+                            strict_filename = f"Backup_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+                            zip_file.writestr(strict_filename, config)
+
                 except Exception as e:
                     if request.options.download_local:
                         zip_file.writestr(f"{device.hostname}_ERROR.txt", f"Failed: {str(e)}")
@@ -251,10 +272,12 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
     if not request.options.download_local:
         return {"message": "Backup completed successfully on devices."}
     
+# Optional: Also add a timestamp to the master ZIP file
+    master_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=VNMS_Bulk_Backup.zip"}
+        headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{master_timestamp}.zip"}
     )
 
 # RESTORE BACKUPS TO DEVICES (POST)
