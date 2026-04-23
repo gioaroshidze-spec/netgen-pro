@@ -1,14 +1,19 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import subprocess
+from database import SessionLocal, engine
+import models
+import schemas
 from netmiko import ConnectHandler
-import jinja2
-import models, schemas
-from database import engine, SessionLocal
 import io
 import zipfile
-from fastapi.responses import StreamingResponse
+import os
+import tempfile
+import subprocess
+import json
+import jinja2
+import asyncio
 
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
@@ -251,3 +256,98 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=VNMS_Bulk_Backup.zip"}
     )
+
+# RESTORE BACKUPS TO DEVICES (POST)
+@app.post("/restore-devices/")
+async def restore_device(file: UploadFile = File(...), device_ids: str = Form(...), db: Session = Depends(get_db)):
+    try:
+        target_ids = json.loads(device_ids)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid device_ids format")
+    
+    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(target_ids)).all()
+    if not devices:
+        raise HTTPException(status_code=404, detail="No valid devices found")
+    
+    # Create a secure temporary workspace for Ansible to stage files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = os.path.join(tmpdir, file.filename)
+        content = await file.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        extracted_files = {}
+
+        # --- PHASE 1: FILE MAPPING ---
+        if file.filename.endswith(".zip"):
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                zip_ref.extractall(tmpdir)
+                for dev in devices:
+                    # Match by looking for "_hostanme_" inside the unzipped file names
+                    for exctracted_name in zip_ref.namelist():
+                        if f"_{dev.hostname}_" in exctracted_name:
+                            extracted_files[dev.hostname] = os.path.join(tmpdir, exctracted_name)
+                            break
+        else:
+            # If it's a single text file, map it to all selected devices
+            for dev in devices:
+                extracted_files[dev.hostname] = file_path
+
+# --- PHASE 2: GENERATE ANSIBLE INVENTORY ---
+        inventory_path = os.path.join(tmpdir, "inventory.ini")
+        with open(inventory_path, "w") as inv:
+            inv.write("[targets]\n")
+            for dev in devices:
+                target_file = extracted_files.get(dev.hostname, "")
+                if target_file:
+                    # FIX: Added Privilege Escalation (become) so Ansible can enter config mode
+                    inv.write(
+                        f'{dev.hostname} '
+                        f'ansible_host={dev.ip_address} '
+                        f'ansible_user={dev.username} '
+                        f'ansible_password=Werfds123 '
+                        f'ansible_become=yes '
+                        f'ansible_become_method=enable '
+                        f'ansible_network_os=cisco.ios.ios '
+                        f'ansible_connection=network_cli '
+                        f'restore_file="{target_file}"\n'
+                    )
+
+# --- PHASE 3: GENERATE ANSIBLE PLAYBOOK ---
+        playbook_path = os.path.join(tmpdir, "restore.yml")
+        playbook_content = """
+---
+- name: VNMS Full Configuration Restore
+  hosts: targets
+  gather_facts: no
+  tasks:
+    - name: Push Configuration to Target
+      cisco.ios.ios_config:
+        src: "{{ restore_file }}"
+"""
+        with open(playbook_path, "w") as pb:
+            pb.write(playbook_content)
+
+        # --- PHASE 4: EXECUTE ANSIBLE ---
+        # Temporarily disable host key checking so Ansible doesn't hang on new switches
+        env = os.environ.copy()
+        env["ANSIBLE_HOST_KEY_CHECKING"] = "Flase"
+
+        # Launch the Ansible process without the old capture_output/text kwargs
+        process = await asyncio.create_subprocess_exec(
+            "ansible-playbook", "-i", inventory_path, playbook_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env
+        )
+
+        # Wait for Ansible to finish and grab the outputs
+        stdout, stderr = await process.communicate()
+
+        # Decode the raw bytes into readable text
+        output = stdout.decode()
+
+        if process. returncode != 0 and "unreachable" in output.lower():
+            return {"message": "Ansible execution finished with errors", "logs": output}
+        
+        return {"message": "Restore Operations Completed", "logs": output}
