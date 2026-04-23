@@ -148,7 +148,10 @@ def get_network_map(db: Session = Depends(get_db)):
             "hostname": device.hostname,
             "ip_address": device.ip_address,
             "device_type": device.device_type,
+            "os_type": device.os_type,
+            "username": device.username,
             "status": status
+            
         })
     return mapped_devices
 
