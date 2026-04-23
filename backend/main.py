@@ -278,20 +278,34 @@ async def restore_device(file: UploadFile = File(...), device_ids: str = Form(..
 
         extracted_files = {}
 
-        # --- PHASE 1: FILE MAPPING ---
+# --- PHASE 1: FILE MAPPING (STRICT ENFORCEMENT) ---
         if file.filename.endswith(".zip"):
             with zipfile.ZipFile(file_path, 'r') as zip_ref:
                 zip_ref.extractall(tmpdir)
                 for dev in devices:
-                    # Match by looking for "_hostanme_" inside the unzipped file names
-                    for exctracted_name in zip_ref.namelist():
-                        if f"_{dev.hostname}_" in exctracted_name:
-                            extracted_files[dev.hostname] = os.path.join(tmpdir, exctracted_name)
+                    match_found = False
+                    for extracted_name in zip_ref.namelist():
+                        if f"_{dev.hostname}_" in extracted_name:
+                            extracted_files[dev.hostname] = os.path.join(tmpdir, extracted_name)
+                            match_found = True
                             break
+                    
+                    # SLAM THE BRAKES! If even ONE selected device is missing from the ZIP
+                    if not match_found:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Bulk Restore Aborted: Could not find a configuration file for '{dev.hostname}' in the uploaded ZIP archive."
+                        )
         else:
-            # If it's a single text file, map it to all selected devices
+            # Single file upload: Validate the hostname is in the filename
             for dev in devices:
-                extracted_files[dev.hostname] = file_path
+                if f"_{dev.hostname}_" in file.filename:
+                    extracted_files[dev.hostname] = file_path
+                else:
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Safety Abort: The file '{file.filename}' does not match the target device '{dev.hostname}'."
+                    )
 
 # --- PHASE 2: GENERATE ANSIBLE INVENTORY ---
         inventory_path = os.path.join(tmpdir, "inventory.ini")
