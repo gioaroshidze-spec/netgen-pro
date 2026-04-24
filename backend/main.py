@@ -17,6 +17,7 @@ import asyncio
 from datetime import datetime
 import difflib
 import re
+from typing import Optional
 
 # --- GLOBAL VARIABLES & DIRECTORIES ---
 ARCHIVE_DIR = "./archive"
@@ -448,25 +449,45 @@ def get_archive_files():
 
     return grouped_files
 
-class CompareRequest(schemas.BaseModel):
-    file1: str
-    file2: str
-
-
 @app.post("/compare/")
-def compare_configs(request: CompareRequest):
-    path1 = os.path.join(ARCHIVE_DIR, request.file1)
-    path2 = os.path.join(ARCHIVE_DIR, request.file2)
+async def compare_configs(
+    upload_file1: Optional[UploadFile] = File(None),
+    archive_file1: Optional[str] = Form(None),
+    upload_file2: Optional[UploadFile] = File(None),
+    archive_file2: Optional[str] = Form(None)
+):
+    config1 = ""
+    config2 = ""
 
-    if not os.path.exists(path1) or not os.path.exists(path2):
-        raise HTTPException(status_code=404, detail="One or both backup files not found in archive.")
-    
-    with open(path1, "r") as f1, open(path2, "r") as f2:
-        config1 = f1.read()
-        config2 = f2.read()
+    # --- RESOLVE FILE 1 (Left Side) ---
+    if upload_file1:
+        config1 = (await upload_file1.read()).decode('utf-8', errors='ignore')
+        desc1 = upload_file1.filename
+    elif archive_file1:
+        path1 = os.path.join(ARCHIVE_DIR, archive_file1)
+        if not os.path.exists(path1):
+            raise HTTPException(status_code=404, detail="File 1 not found in archive.")
+        with open(path1, "r", encoding="utf-8", errors="ignore") as f1:
+            config1 = f1.read()
+        desc1 = archive_file1
+    else:
+        raise HTTPException(status_code=400, detail="Missing File 1")
+
+    # --- RESOLVE FILE 2 (Right Side) ---
+    if upload_file2:
+        config2 = (await upload_file2.read()).decode('utf-8', errors='ignore')
+        desc2 = upload_file2.filename
+    elif archive_file2:
+        path2 = os.path.join(ARCHIVE_DIR, archive_file2)
+        if not os.path.exists(path2):
+            raise HTTPException(status_code=404, detail="File 2 not found in archive.")
+        with open(path2, "r", encoding="utf-8", errors="ignore") as f2:
+            config2 = f2.read()
+        desc2 = archive_file2
+    else:
+        raise HTTPException(status_code=400, detail="Missing File 2")
 
     # --- SMART SCRUBBER ---
-    # Remove timestamps so they don't show up as false "differences"
     config1 = re.sub(r'^! Last configuration change.*$\n?', '', config1, flags=re.MULTILINE)
     config2 = re.sub(r'^! Last configuration change.*$\n?', '', config2, flags=re.MULTILINE)
     config1 = re.sub(r'^! NVRAM config last updated.*$\n?', '', config1, flags=re.MULTILINE)
@@ -475,13 +496,13 @@ def compare_configs(request: CompareRequest):
     if config1 == config2:
         return {"match": True, "html": "<div style='padding: 20px; color: #4caf50; font-weight: bold; text-align: center;'>✅ Configurations are a 100% perfect match. Zero drift detected.</div>"}
     
-    # Generate highlited HTML diff
+    # Generate highlighted HTML diff
     differ = difflib.HtmlDiff()
     html_table = differ.make_table(
         config1.splitlines(),
         config2.splitlines(),
-        fromdesc=request.file1,
-        todesc=request.file2,
+        fromdesc=desc1,
+        todesc=desc2,
         context=True,
         numlines=3
     )
