@@ -6,7 +6,14 @@ const MAP_URL = 'http://127.0.0.1:8000/network-map/'
 
 function App() {
   // --- STATE MANAGEMENT ---
-  const [activeTab, setActiveTab] = useState('Maintenance')
+  const [activeTab, setActiveTab] = useState(() => {
+    return localStorage.getItem('vnmsActiveTab') || 'Configuration'
+  })
+
+  // Add this effect right underneath it so it saves the tab every time you click one:
+  useEffect(() => {
+    localStorage.setItem('vnmsActiveTab', activeTab)
+  }, [activeTab])
   const [devices, setDevices] = useState([])
   const [isRefreshing, setIsRefreshing] = useState(false)
   
@@ -262,7 +269,12 @@ const handleRestore = () => {
       
       {/* ================= TOP NAVIGATION TABS ================= */}
       <div style={{ display: 'flex', backgroundColor: '#252526', borderBottom: '1px solid #333', padding: '0 20px', alignItems: 'center' }}>
-        <h2 style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px' }}>VNMS</h2>
+        <h2 
+          onClick={() => setActiveTab('Configuration')} 
+          style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}
+        >
+          VNMS
+        </h2>
         <div style={{ display: 'flex', gap: '2px' }}>
           {TABS.map(tab => (
             <button 
