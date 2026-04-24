@@ -289,7 +289,7 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
         headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{master_timestamp}.zip"}
     )
 
-# RESTORE BACKUPS TO DEVICES (POST)
+# 9. RESTORE BACKUPS TO DEVICES (POST)
 @app.post("/restore-devices/")
 async def restore_device(file: UploadFile = File(...), device_ids: str = Form(...), db: Session = Depends(get_db)):
     try:
@@ -404,3 +404,48 @@ async def restore_device(file: UploadFile = File(...), device_ids: str = Form(..
             return {"message": "Ansible execution finished with errors", "logs": output}
         
         return {"message": "Restore Operations Completed", "logs": output}
+    
+
+# 10. --- SERVER ARCHIVE & COMPARE ENDPOINTS (GET) ---
+@app.get("/archive/files")
+def get_archive_files():
+    """Scans the archive folder and groups files by OS, Device Type, and Hostname."""
+    if not os.path.exists(ARCHIVE_DIR):
+        return {}
+    
+    files = os.listdir(ARCHIVE_DIR)
+    grouped_files = {}
+
+    for f in files:
+        if not f.endswith(".txt"):
+            continue
+        # Parse our strict filename: Backup_cisco_switch_cctv_sw1_20260424_120000.txt
+        parts = f.split("_")
+        if len (parts) >= 6:
+            os_type = parts[1]
+            dev_type = parts[2]
+            # Handle hostnames that might have underscores in them
+            hostname = "_".join(parts[3:-2])
+
+            if os_type not in grouped_files:
+                grouped_files[os_type] = {}
+            if dev_type not in grouped_files[os_type]:
+                grouped_files[os_type][dev_type] = {}
+            if hostname not in grouped_files[os_type][dev_type]:
+                grouped_files[os_type][dev_type][hostname] = []
+
+            grouped_files[os_type][dev_type][hostname].append(f)
+    
+    # Sorts files so newest is first
+    for os_t in grouped_files:
+        for dev_t in grouped_files[os_t]:
+            for host in grouped_files[os_t][dev_t]:
+                grouped_files[os_t][dev_t][host].sort(reverse=True)
+
+    return grouped_files
+
+class CompareRequest(schemas.BaseModel):
+    file1: str
+    file2: str
+
+
