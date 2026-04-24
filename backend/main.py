@@ -15,6 +15,8 @@ import json
 import jinja2
 import asyncio
 from datetime import datetime
+import difflib
+import re
 
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
@@ -215,6 +217,10 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
         
         strict_filename = f"Backup_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
         
+        archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+        with open(archive_path, "w") as f:
+            f.write(config_data)
+
         # We now return the filename to the frontend so React knows what to name the file!
         return {
             "hostname": device.hostname, 
