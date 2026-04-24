@@ -18,6 +18,10 @@ from datetime import datetime
 import difflib
 import re
 
+# --- GLOBAL VARIABLES & DIRECTORIES ---
+ARCHIVE_DIR = "./archive"
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
+
 # Create the database tables
 models.Base.metadata.create_all(bind=engine)
 
@@ -449,3 +453,37 @@ class CompareRequest(schemas.BaseModel):
     file2: str
 
 
+@app.post("/compare/")
+def compare_configs(request: CompareRequest):
+    path1 = os.path.join(ARCHIVE_DIR, request.file1)
+    path2 = os.path.join(ARCHIVE_DIR, request.file2)
+
+    if not os.path.exists(path1) or not os.path.exists(path2):
+        raise HTTPException(status_code=404, detail="One or both backup files not found in archive.")
+    
+    with open(path1, "r") as f1, open(path2, "r") as f2:
+        config1 = f1.read()
+        config2 = f2.read()
+
+    # --- SMART SCRUBBER ---
+    # Remove timestamps so they don't show up as false "differences"
+    config1 = re.sub(r'^! Last configuration change.*$\n?', '', config1, flags=re.MULTILINE)
+    config2 = re.sub(r'^! Last configuration change.*$\n?', '', config2, flags=re.MULTILINE)
+    config1 = re.sub(r'^! NVRAM config last updated.*$\n?', '', config1, flags=re.MULTILINE)
+    config2 = re.sub(r'^! NVRAM config last updated.*$\n?', '', config2, flags=re.MULTILINE)
+
+    if config1 == config2:
+        return {"match": True, "html": "<div style='padding: 20px; color: #4caf50; font-weight: bold; text-align: center;'>✅ Configurations are a 100% perfect match. Zero drift detected.</div>"}
+    
+    # Generate highlited HTML diff
+    differ = difflib.HtmlDiff()
+    html_table = differ.make_table(
+        config1.splitlines(),
+        config2.splitlines(),
+        fromdesc=request.file1,
+        todesc=request.file2,
+        context=True,
+        numlines=3
+    )
+
+    return {"match": False, "html": html_table}
