@@ -1,0 +1,271 @@
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from netmiko import ConnectHandler
+from datetime import datetime
+from database import get_db
+import models, schemas
+import os, io, zipfile, json
+from dotenv import load_dotenv
+import tempfile
+import asyncio
+from typing import Optional
+
+load_dotenv()
+
+router = APIRouter(tags=["Maintenance Operations"])
+ARCHIVE_DIR = "archive"
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
+
+
+# 7. Netmiko SSH connection  single backup(POST)
+@router.post("/backup-device/{device_id}")
+def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db)):
+    
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    connection_params = {
+        'device_type': 'cisco_ios',
+        'host': device.ip_address,
+        'username': device.username,
+        'password': os.getenv("DEVICE_PASSWORD")
+    }
+
+    try:
+        with ConnectHandler(**connection_params) as net_connect:
+            net_connect.enable()
+            config_data = ""
+
+            # Action 1: Write to NVRAM
+            if options.save_nvram:
+                net_connect.save_config()
+
+            # Action 2: Save to Flash Overwriting the old one
+            if options.save_flash:
+                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
+                net_connect.send_command_timing("\n") 
+
+            # Action 3: Pull config if we are downloading OR archiving
+            if options.download_local or options.save_archive:
+                raw_config = net_connect.send_command("show running-config")
+                clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
+                config_data = "\n".join(clean_lines)
+
+        # --- OUTSIDE THE SSH CONNECTION: Process the files ---
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        os_type = device.os_type or "UnknownOS"
+        dev_type = device.device_type or "UnknownDevice"
+        
+        custom_prefix = options.prefix.strip() if options.prefix else "Backup"
+        strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+        
+        # Save to Server Archive explicitly
+        if options.save_archive:
+            archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+            with open(archive_path, "w") as f:
+                f.write(config_data)
+
+        return {
+            "hostname": device.hostname, 
+            "config": config_data, 
+            "filename": strict_filename
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
+
+# 8. Bulk Backup (POST)
+@router.post("/bulk-backup")
+def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db)):
+    zip_buffer = io.BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for dev_id in request.device_ids:
+            device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == dev_id).first()
+            if device:
+                connection_params = {
+                    'device_type': 'cisco_ios',
+                    "host": device.ip_address,
+                    'username': device.username,
+                    'password': os.getenv("DEVICE_PASSWORD")
+                }
+                try:
+                    with ConnectHandler(**connection_params) as net_connect:
+                        net_connect.enable()
+
+                        if request.options.save_nvram:
+                            net_connect.save_config()
+                        
+                        if request.options.save_flash:
+                            net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
+                            net_connect.send_command_timing("\n")
+                        
+                        # Pull config if downloading OR archiving
+                        if request.options.download_local or request.options.save_archive:
+                            raw_config = net_connect.send_command("show running-config")
+                            clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
+                            config = "\n".join(clean_lines)
+                            
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            os_type = device.os_type or "UnknownOS"
+                            dev_type = device.device_type or "UnknownDevice"
+                            
+                            custom_prefix = request.options.prefix.strip() if request.options.prefix else "Backup"
+                            strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+                            
+                            # Save to Archive
+                            if request.options.save_archive:
+                                archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+                                with open(archive_path, "w") as f:
+                                    f.write(config)
+
+                            # Save to ZIP
+                            if request.options.download_local:
+                                zip_file.writestr(strict_filename, config)
+
+                except Exception as e:
+                    if request.options.download_local:
+                        zip_file.writestr(f"{device.hostname}_ERROR.txt", f"Failed: {str(e)}")
+
+    zip_buffer.seek(0)
+
+    if not request.options.download_local:
+        return {"message": "Backup completed successfully on devices."}
+    
+    master_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{master_timestamp}.zip"}
+    )
+# 9. RESTORE BACKUPS TO DEVICES (POST)
+@router.post("/restore-devices/")
+async def restore_devices(
+    device_ids: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+    archive_file: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+        import shutil
+        try:
+            target_ids = json.loads(device_ids)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid device_ids format.")
+        
+        devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(target_ids)).all()
+        if not devices:
+            raise HTTPException(status_code=404, detail=("No valid devices found."))
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Determine where the file is coming from
+            if file and file.filename:
+                actual_filename = file.filename
+                file_path = os.path.join(tmpdir, actual_filename)
+                content = await file.read()
+                with open(file_path, "wb") as f:
+                    f.write(content)
+            
+            elif archive_file:
+                actual_filename = archive_file
+                source_path = os.path.join(ARCHIVE_DIR, archive_file)
+                if not os.path.exists(source_path):
+                    raise HTTPException(status_code=404, detail="Archive file not found.")
+                file_path = os.path.join(tmpdir, archive_file)
+            else:
+                raise HTTPException(status_code=400, detail="No configuration file provided.")
+            
+            extracted_files = {}
+        
+
+
+# --- PHASE 1: FILE MAPPING (STRICT ENFORCEMENT) ---
+            if actual_filename.endswith(".zip"):
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    zip_ref.extractall(tmpdir)
+                    for dev in devices:
+                        match_found = False
+                        for extracted_name in zip_ref.namelist():
+                            if f"_{dev.hostname}_" in extracted_name:
+                                extracted_files[dev.hostname] = os.path.join(tmpdir, extracted_name)
+                                match_found = True
+                                break
+                        if not match_found:
+                            raise HTTPException(status_code=400, detail=f"Bluk Restore Aborted: Could not find '{dev.hostname}' in ZIP.")
+                        
+            else:
+                for dev in devices:
+                    if f"_{dev.hostname}_" in actual_filename:
+                        extracted_files[dev.hostname] = file_path
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Safety Abort: '{actual_filename} does not match target '{dev.hostname}'.'")
+                    
+
+# --- PHASE 2: GENERATE ANSIBLE INVENTORY ---
+        inventory_path = os.path.join(tmpdir, "inventory.ini")
+        with open(inventory_path, "w") as inv:
+            inv.write("[targets]\n")
+            for dev in devices:
+                target_file = extracted_files.get(dev.hostname, "")
+                if target_file:
+                    # FIX: Added Privilege Escalation (become) so Ansible can enter config mode
+                    inv.write(
+                        f'{dev.hostname} '
+                        f'ansible_host={dev.ip_address} '
+                        f'ansible_user={dev.username} '
+                        f'ansible_password={os.getenv("DEVICE_PASSWORD")} '
+                        f'ansible_become=yes '
+                        f'ansible_become_method=enable '
+                        f'ansible_network_os=cisco.ios.ios '
+                        f'ansible_connection=network_cli '
+                        f'restore_file="{target_file}"\n'
+                    )
+
+# --- PHASE 3: GENERATE ANSIBLE PLAYBOOK ---
+        playbook_path = os.path.join(tmpdir, "restore.yml")
+        playbook_content = """
+---
+- name: VNMS Full Configuration Restore via SCP
+  hosts: targets
+  gather_facts: no
+  tasks:
+    - name: 1. Securely Transfer Backup File to Switch Flash
+      ansible.netcommon.net_put:
+        src: "{{ restore_file }}"
+        dest: "flash:vnms_restore.cfg"
+        protocol: scp
+
+    - name: 2. Force Configuration Replace (Wipe and Mirror)
+      cisco.ios.ios_command:
+        commands:
+          - command: 'configure replace flash:vnms_restore.cfg force'
+"""
+        with open(playbook_path, "w") as pb:
+            pb.write(playbook_content)
+
+        # --- PHASE 4: EXECUTE ANSIBLE ---
+        # Temporarily disable host key checking so Ansible doesn't hang on new switches
+        env = os.environ.copy()
+        env["ANSIBLE_HOST_KEY_CHECKING"] = "Flase"
+
+        # Launch the Ansible process without the old capture_output/text kwargs
+        process = await asyncio.create_subprocess_exec(
+            "ansible-playbook", "-i", inventory_path, playbook_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env
+        )
+
+        # Wait for Ansible to finish and grab the outputs
+        stdout, stderr = await process.communicate()
+
+        # Decode the raw bytes into readable text
+        output = stdout.decode()
+
+        if process. returncode != 0 and "unreachable" in output.lower():
+            return {"message": "Ansible execution finished with errors", "logs": output}
+        
+        return {"message": "Restore Operations Completed", "logs": output}
+    
