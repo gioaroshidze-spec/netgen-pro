@@ -47,3 +47,9 @@ class BackupOptions(BaseModel):
 class BulkBackupRequest(BaseModel):
     device_ids: list[int]
     options: BackupOptions
+
+# --- CONFIGURATION ENGINE REQUESTS ---
+class AIConfigGenerate(BaseModel):
+    prompt: str
+    switches: list[str]
+    routers: list[str]

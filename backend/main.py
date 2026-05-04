@@ -4,7 +4,7 @@ import models
 from database import engine
 
 # Import our new segregated routers
-from routers import devices, maintenance, compare
+from routers import devices, maintenance, compare, configuration
 
 # Initialize Database Engine
 models.Base.metadata.create_all(bind=engine)
@@ -25,6 +25,7 @@ app.add_middleware(
 app.include_router(devices.router)
 app.include_router(maintenance.router)
 app.include_router(compare.router)
+app.include_router(configuration.router)
 
 # Basic Health Check
 @app.get("/")
