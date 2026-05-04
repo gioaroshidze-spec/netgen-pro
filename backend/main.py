@@ -18,6 +18,9 @@ from datetime import datetime
 import difflib
 import re
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv() # This loads  the .env file immediately
 
 # --- GLOBAL VARIABLES & DIRECTORIES ---
 ARCHIVE_DIR = "./archive"
@@ -212,7 +215,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
         'device_type': 'cisco_ios',
         'host': device.ip_address,
         'username': device.username,
-        'password': 'Werfds123'
+        'password': os.getenv("DEVICE_PASSWORD")
     }
 
     try:
@@ -271,7 +274,7 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
                     'device_type': 'cisco_ios',
                     "host": device.ip_address,
                     'username': device.username,
-                    'password': 'Werfds123'
+                    'password': os.getenv("DEVICE_PASSWORD")
                 }
                 try:
                     with ConnectHandler(**connection_params) as net_connect:
@@ -396,7 +399,7 @@ async def restore_devices(
                         f'{dev.hostname} '
                         f'ansible_host={dev.ip_address} '
                         f'ansible_user={dev.username} '
-                        f'ansible_password=Werfds123 '
+                        f'ansible_password={os.getenv("DEVICE_PASSWORD")} '
                         f'ansible_become=yes '
                         f'ansible_become_method=enable '
                         f'ansible_network_os=cisco.ios.ios '
