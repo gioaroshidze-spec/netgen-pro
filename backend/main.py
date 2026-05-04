@@ -65,6 +65,16 @@ def read_root():
 # 1. Create a new device (POST)
 @app.post("/device/", response_model=schemas.DeviceResponse)
 def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db)):
+    
+    # GUARDRAIL: Check if Hostname or IP already exists
+    existing_host = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname == device.hostname).first()
+    if existing_host:
+        raise HTTPException(status_code=400, detail=f"Error: Hostname '{device.hostname}' is already taken.")
+        
+    existing_ip = db.query(models.NetworkDevice).filter(models.NetworkDevice.ip_address == device.ip_address).first()
+    if existing_ip:
+        raise HTTPException(status_code=400, detail=f"Error: IP Address '{device.ip_address}' is already in use.")
+
     # Package the incoming data into a database model
     db_device = models.NetworkDevice(
         hostname=device.hostname,
@@ -96,6 +106,18 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
     # If it doesn't exist, throw a 404 error
     if db_device is None:
         raise HTTPException(status_code=404, detail="Device not found")
+        
+    # GUARDRAIL: If they are changing the hostname, make sure the new one isn't taken by SOMEONE ELSE
+    if device_update.hostname and device_update.hostname != db_device.hostname:
+        existing_host = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname == device_update.hostname).first()
+        if existing_host:
+            raise HTTPException(status_code=400, detail=f"Error: Hostname '{device_update.hostname}' is already taken.")
+
+    # GUARDRAIL: If they are changing the IP, make sure the new one isn't taken
+    if device_update.ip_address and device_update.ip_address != db_device.ip_address:
+        existing_ip = db.query(models.NetworkDevice).filter(models.NetworkDevice.ip_address == device_update.ip_address).first()
+        if existing_ip:
+            raise HTTPException(status_code=400, detail=f"Error: IP Address '{device_update.ip_address}' is already in use.")
     
     # Update only the fields the user actually sent us
     update_data = device_update.model_dump(exclude_unset=True)
@@ -205,28 +227,28 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
             # Action 2: Save to Flash Overwriting the old one
             if options.save_flash:
                 net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
-                net_connect.send_command_timing("\n") # Press enter to confirm destination filename
+                net_connect.send_command_timing("\n") 
 
-            # Action 3: Download to Local (Scrub the garbage lines)
-            if options.download_local:
+            # Action 3: Pull config if we are downloading OR archiving
+            if options.download_local or options.save_archive:
                 raw_config = net_connect.send_command("show running-config")
-                # Clean out the "Building Configuration..." lines os Ansible doesn't fail later
                 clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                 config_data = "\n".join(clean_lines)
 
-        # --- NEW: Generate Strict Multi-Vendor Filename ---
+        # --- OUTSIDE THE SSH CONNECTION: Process the files ---
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Add fallbacks just in case the DB has null values
         os_type = device.os_type or "UnknownOS"
         dev_type = device.device_type or "UnknownDevice"
         
-        strict_filename = f"Backup_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+        custom_prefix = options.prefix.strip() if options.prefix else "Backup"
+        strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
         
-        archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
-        with open(archive_path, "w") as f:
-            f.write(config_data)
+        # Save to Server Archive explicitly
+        if options.save_archive:
+            archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+            with open(archive_path, "w") as f:
+                f.write(config_data)
 
-        # We now return the filename to the frontend so React knows what to name the file!
         return {
             "hostname": device.hostname, 
             "config": config_data, 
@@ -235,7 +257,6 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
-    
 
 # 8. Bulk Backup (POST)
 @app.post("/bulk-backup")
@@ -263,18 +284,28 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
                             net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
                             net_connect.send_command_timing("\n")
                         
-                        if request.options.download_local:
+                        # Pull config if downloading OR archiving
+                        if request.options.download_local or request.options.save_archive:
                             raw_config = net_connect.send_command("show running-config")
                             clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                             config = "\n".join(clean_lines)
                             
-                            # --- NEW: Generate Strict Multi-Vendor Filename inside ZIP ---
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             os_type = device.os_type or "UnknownOS"
                             dev_type = device.device_type or "UnknownDevice"
                             
-                            strict_filename = f"Backup_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
-                            zip_file.writestr(strict_filename, config)
+                            custom_prefix = request.options.prefix.strip() if request.options.prefix else "Backup"
+                            strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
+                            
+                            # Save to Archive
+                            if request.options.save_archive:
+                                archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+                                with open(archive_path, "w") as f:
+                                    f.write(config)
+
+                            # Save to ZIP
+                            if request.options.download_local:
+                                zip_file.writestr(strict_filename, config)
 
                 except Exception as e:
                     if request.options.download_local:
@@ -282,67 +313,76 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
 
     zip_buffer.seek(0)
 
-    # If they only saved to NVRAM/Flash and didn't want a zip file downloaded:
     if not request.options.download_local:
         return {"message": "Backup completed successfully on devices."}
     
-# Optional: Also add a timestamp to the master ZIP file
     master_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{master_timestamp}.zip"}
     )
-
 # 9. RESTORE BACKUPS TO DEVICES (POST)
 @app.post("/restore-devices/")
-async def restore_device(file: UploadFile = File(...), device_ids: str = Form(...), db: Session = Depends(get_db)):
-    try:
-        target_ids = json.loads(device_ids)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid device_ids format")
-    
-    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(target_ids)).all()
-    if not devices:
-        raise HTTPException(status_code=404, detail="No valid devices found")
-    
-    # Create a secure temporary workspace for Ansible to stage files
-    with tempfile.TemporaryDirectory() as tmpdir:
-        file_path = os.path.join(tmpdir, file.filename)
-        content = await file.read()
-        with open(file_path, "wb") as f:
-            f.write(content)
+async def restore_devices(
+    device_ids: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+    archive_file: Optional[str] = Form(None),
+    db: Session = Depends(get_db)
+):
+        import shutil
+        try:
+            target_ids = json.loads(device_ids)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid device_ids format.")
+        
+        devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(target_ids)).all()
+        if not devices:
+            raise HTTPException(status_code=404, detail=("No valid devices found."))
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Determine where the file is coming from
+            if file and file.filename:
+                actual_filename = file.filename
+                file_path = os.path.join(tmpdir, actual_filename)
+                content = await file.read()
+                with open(file_path, "wb") as f:
+                    f.write(content)
+            
+            elif archive_file:
+                actual_filename = archive_file
+                source_path = os.path.join(ARCHIVE_DIR, archive_file)
+                if not os.path.exists(source_path):
+                    raise HTTPException(status_code=404, detail="Archive file not found.")
+                file_path = os.path.join(tmpdir, archive_file)
+            else:
+                raise HTTPException(status_code=400, detail="No configuration file provided.")
+            
+            extracted_files = {}
+        
 
-        extracted_files = {}
 
 # --- PHASE 1: FILE MAPPING (STRICT ENFORCEMENT) ---
-        if file.filename.endswith(".zip"):
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                zip_ref.extractall(tmpdir)
+            if actual_filename.endswith(".zip"):
+                with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                    zip_ref.extractall(tmpdir)
+                    for dev in devices:
+                        match_found = False
+                        for extracted_name in zip_ref.namelist():
+                            if f"_{dev.hostname}_" in extracted_name:
+                                extracted_files[dev.hostname] = os.path.join(tmpdir, extracted_name)
+                                match_found = True
+                                break
+                        if not match_found:
+                            raise HTTPException(status_code=400, detail=f"Bluk Restore Aborted: Could not find '{dev.hostname}' in ZIP.")
+                        
+            else:
                 for dev in devices:
-                    match_found = False
-                    for extracted_name in zip_ref.namelist():
-                        if f"_{dev.hostname}_" in extracted_name:
-                            extracted_files[dev.hostname] = os.path.join(tmpdir, extracted_name)
-                            match_found = True
-                            break
+                    if f"_{dev.hostname}_" in actual_filename:
+                        extracted_files[dev.hostname] = file_path
+                    else:
+                        raise HTTPException(status_code=400, detail=f"Safety Abort: '{actual_filename} does not match target '{dev.hostname}'.'")
                     
-                    # SLAM THE BRAKES! If even ONE selected device is missing from the ZIP
-                    if not match_found:
-                        raise HTTPException(
-                            status_code=400, 
-                            detail=f"Bulk Restore Aborted: Could not find a configuration file for '{dev.hostname}' in the uploaded ZIP archive."
-                        )
-        else:
-            # Single file upload: Validate the hostname is in the filename
-            for dev in devices:
-                if f"_{dev.hostname}_" in file.filename:
-                    extracted_files[dev.hostname] = file_path
-                else:
-                    raise HTTPException(
-                        status_code=400, 
-                        detail=f"Safety Abort: The file '{file.filename}' does not match the target device '{dev.hostname}'."
-                    )
 
 # --- PHASE 2: GENERATE ANSIBLE INVENTORY ---
         inventory_path = os.path.join(tmpdir, "inventory.ini")
@@ -413,35 +453,50 @@ async def restore_device(file: UploadFile = File(...), device_ids: str = Form(..
 
 # 10. --- SERVER ARCHIVE & COMPARE ENDPOINTS (GET) ---
 @app.get("/archive/files")
-def get_archive_files():
-    """Scans the archive folder and groups files by OS, Device Type, and Hostname."""
+def get_archive_files(db: Session = Depends(get_db)): # <-- NEW: Brought the Database in!
+    """Scans the archive folder and intelligently groups files using the Database Inventory."""
     if not os.path.exists(ARCHIVE_DIR):
         return {}
     
     files = os.listdir(ARCHIVE_DIR)
+    
+    # Grab all known devices from our inventory
+    devices = db.query(models.NetworkDevice).all()
     grouped_files = {}
 
     for f in files:
         if not f.endswith(".txt"):
             continue
-        # Parse our strict filename: Backup_cisco_switch_cctv_sw1_20260424_120000.txt
-        parts = f.split("_")
-        if len (parts) >= 6:
-            os_type = parts[1]
-            dev_type = parts[2]
-            # Handle hostnames that might have underscores in them
-            hostname = "_".join(parts[3:-2])
+            
+        # Figure out which device this file belongs to
+        matched_device = None
+        for dev in devices:
+            if f"_{dev.hostname}_" in f:
+                matched_device = dev
+                break
+        
+        # If we found it in the DB, use the official DB attributes!
+        if matched_device:
+            os_t = matched_device.os_type or "UnknownOS"
+            dev_t = matched_device.device_type or "UnknownDevice"
+            host = matched_device.hostname
+        else:
+            # If it's an old test file that doesn't match the DB anymore, quarantine it
+            os_t = "Unassigned"
+            dev_t = "Unknown"
+            host = "Orphaned_Files"
 
-            if os_type not in grouped_files:
-                grouped_files[os_type] = {}
-            if dev_type not in grouped_files[os_type]:
-                grouped_files[os_type][dev_type] = {}
-            if hostname not in grouped_files[os_type][dev_type]:
-                grouped_files[os_type][dev_type][hostname] = []
+        # Build the dictionary
+        if os_t not in grouped_files:
+            grouped_files[os_t] = {}
+        if dev_t not in grouped_files[os_t]:
+            grouped_files[os_t][dev_t] = {}
+        if host not in grouped_files[os_t][dev_t]:
+            grouped_files[os_t][dev_t][host] = []
 
-            grouped_files[os_type][dev_type][hostname].append(f)
+        grouped_files[os_t][dev_t][host].append(f)
     
-    # Sorts files so newest is first
+    # Sort files so newest is first
     for os_t in grouped_files:
         for dev_t in grouped_files[os_t]:
             for host in grouped_files[os_t][dev_t]:
@@ -497,14 +552,27 @@ async def compare_configs(
         return {"match": True, "html": "<div style='padding: 20px; color: #4caf50; font-weight: bold; text-align: center;'>✅ Configurations are a 100% perfect match. Zero drift detected.</div>"}
     
     # Generate highlighted HTML diff
-    differ = difflib.HtmlDiff()
-    html_table = differ.make_table(
+    diff_lines = list(difflib.unified_diff(
         config1.splitlines(),
         config2.splitlines(),
-        fromdesc=desc1,
-        todesc=desc2,
-        context=True,
-        numlines=3
-    )
+        fromfile=desc1,
+        tofile=desc2,
+        n=3
+    ))
 
-    return {"match": False, "html": html_table}
+    html_output = "<pre style='font-family: monospace; font-size: 14px; line-height: 1.4;'>"
+    for line in diff_lines:
+        safe_line = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if safe_line.startswith("---") or safe_line.startswith("+++"):
+            html_output += f"<strong style='color: #fff;'>{safe_line}</strong>\n"
+        elif safe_line.startswith("@@"):
+            html_output += f"<span style='color: #aaa;'>{safe_line}</span>\n"
+        elif safe_line.startswith("-"):
+            html_output += f"<span style='color: #4caf50;'>{safe_line}</span>\n"  # Baseline = Green
+        elif safe_line.startswith("+"):
+            html_output += f"<span style='color: #007acc;'>{safe_line}</span>\n"  # Target = Blue
+        else:
+            html_output += f"<span style='color: #d4d4d4;'>{safe_line}</span>\n"
+    html_output += "</pre>"
+
+    return {"match": False, "html": html_output}

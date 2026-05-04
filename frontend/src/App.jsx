@@ -38,6 +38,7 @@ function App() {
   const [backupDestNVRAM, setBackupDestNVRAM] = useState(false)
   const [backupDestFlash, setBackupDestFlash] = useState(false)
   const [backupDestLocal, setBackupDestLocal] = useState(true)
+  const [backupDestArchive, setBackupDestArchive] = useState(true)
 
   // --- COMPARE TAB STATES ---
   const [archiveFiles, setArchiveFiles] = useState({})
@@ -76,12 +77,18 @@ function App() {
   
   // Restore
   const [maintRestoreSearch, setMaintRestoreSearch] = useState('') 
-  const [maintRestoreFile, setMaintRestoreFile] = useState(null)
   const [maintRestoreSwitches, setMaintRestoreSwitches] = useState([])
   const [maintRestoreRouters, setMaintRestoreRouters] = useState([])
   const [isRestoreSwitchesOpen, setIsRestoreSwitchesOpen] = useState(false)
   const [isRestoreRoutersOpen, setIsRestoreRoutersOpen] = useState(false)
   const [isRestoring, setIsRestoring] = useState(false)
+
+  // Separated File States to prevent React crashes
+  const [maintRestoreMode, setMaintRestoreMode] = useState('archive') 
+  const [maintRestoreOs, setMaintRestoreOs] = useState('') 
+  const [maintRestoreHost, setMaintRestoreHost] = useState('') 
+  const [maintRestoreFile, setMaintRestoreFile] = useState('')     // For text (Archive)
+  const [maintRestoreUpload, setMaintRestoreUpload] = useState(null) // For objects (Local Upload)
 
   const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'Inventory', 'Event Logs']
 
@@ -133,7 +140,11 @@ useEffect(() => {
       setEditingId(null)
       fetchNetworkStatus() 
       setIsSubmitting(false)
-    }).catch(err => { console.error(err); setIsSubmitting(false) })
+    }).catch(err => { 
+        console.error(err); 
+        alert("Failed to save: Check console for duplicate IP or Hostname."); 
+        setIsSubmitting(false); 
+    })
   }
 
   const handleDeleteDevice = (id) => {
@@ -145,7 +156,9 @@ useEffect(() => {
   // --- MAINTENANCE API FUNCTIONS ---
   const handleSingleBackup = () => {
     if (!maintSingleDevice) return alert("Please select a device from the dropdown first.");
-    if (!backupDestNVRAM && !backupDestFlash && !backupDestLocal) return alert("Please select at least one backup destination.");
+    // Updated validation to include Archive
+    if (!backupDestNVRAM && !backupDestFlash && !backupDestLocal && !backupDestArchive) return alert("Please select at least one backup destination.");
+    
     const targetDevice = devices.find(d => d.hostname === maintSingleDevice);
     if (!targetDevice) return;
 
@@ -153,7 +166,13 @@ useEffect(() => {
     fetch(`http://127.0.0.1:8000/backup-device/${targetDevice.id}`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ save_nvram: backupDestNVRAM, save_flash: backupDestFlash, download_local: backupDestLocal })
+      body: JSON.stringify({ 
+        save_nvram: backupDestNVRAM,
+        save_flash: backupDestFlash,
+        download_local: backupDestLocal,
+        save_archive: backupDestArchive,
+        prefix: maintBackupName // Sends prefix directly to Python!
+      })
     })
     .then(async (res) => {
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Backup failed"); }
@@ -166,16 +185,8 @@ useEffect(() => {
         const a = document.createElement('a');
         a.href = url;
         
-        // --- NEW: Use the strict multi-vendor filename from Python ---
-        // data.filename looks like: Backup_cisco_switch_cctv_sw1_20260423_143000.txt
-        let finalFilename = data.filename; 
-        
-        // If the user typed a custom prefix, replace the default "Backup_" with their prefix
-        if (maintBackupName) {
-            finalFilename = finalFilename.replace("Backup_", `${maintBackupName}_`);
-        }
-        
-        a.download = finalFilename;
+        // --- NEW: Python already named it perfectly, so we just use data.filename ---
+        a.download = data.filename; 
         
         document.body.appendChild(a);
         a.click();
@@ -189,11 +200,10 @@ useEffect(() => {
     })
     .catch(err => { console.error(err); alert(`Failed to backup: ${err.message}`); setIsBackingUp(false); });
   }
-
   const handleBulkBackup = () => {
     const selectedHostnames = [...maintBackupSwitches, ...maintBackupRouters];
     if (selectedHostnames.length === 0) return alert("Please select at least one device to backup.");
-    if (!backupDestNVRAM && !backupDestFlash && !backupDestLocal) return alert("Please select at least one backup destination.");
+    if (!backupDestNVRAM && !backupDestFlash && !backupDestLocal && !backupDestArchive) return alert("Please select at least one backup destination.");
     
     const targetIds = selectedHostnames.map(h => devices.find(d => d.hostname === h).id);
     setIsBulkBackingUp(true);
@@ -203,7 +213,13 @@ useEffect(() => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
         device_ids: targetIds,
-        options: { save_nvram: backupDestNVRAM, save_flash: backupDestFlash, download_local: backupDestLocal }
+        options: {
+          save_nvram: backupDestNVRAM,
+          save_flash: backupDestFlash,
+          download_local: backupDestLocal,
+          save_archive: backupDestArchive,
+          prefix: maintBackupPrefix
+        }
       })
     })
     .then(async res => {
@@ -234,7 +250,10 @@ useEffect(() => {
   }
 
 const handleRestore = () => {
-    if (!maintRestoreFile) return alert("Please upload a configuration file first.");
+    // Validate based on the mode selected
+    if (maintRestoreMode === 'archive' && !maintRestoreFile) return alert("Please select a file from the archive.");
+    if (maintRestoreMode === 'upload' && !maintRestoreUpload) return alert("Please upload a configuration file first.");
+    
     const selectedHostnames = [...maintRestoreSwitches, ...maintRestoreRouters];
     if (selectedHostnames.length === 0) return alert("Please select target devices.");
     if (!window.confirm(`WARNING: This will overwrite the configuration on ${selectedHostnames.length} device(s). Proceed?`)) return;
@@ -242,15 +261,16 @@ const handleRestore = () => {
     const targetIds = selectedHostnames.map(h => devices.find(d => d.hostname === h).id);
     setIsRestoring(true);
 
-    // Using FormData allows us to securely send binary files (like .zip) to Python
     const formData = new FormData();
-    formData.append("file", maintRestoreFile);
+    if (maintRestoreMode === 'upload') formData.append("file", maintRestoreUpload);
+    if (maintRestoreMode === 'archive') formData.append("archive_file", maintRestoreFile);
     formData.append("device_ids", JSON.stringify(targetIds));
 
     fetch(`${API_URL.replace('/device/', '/restore-devices/')}`, {
       method: 'POST',
-      body: formData // The browser automatically sets Content-Type to multipart/form-data
+      body: formData 
     })
+    // ... leave the rest of your .then() and .catch() code below as it is
     .then(async res => {
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Restore failed"); }
       return res.json();
@@ -435,6 +455,9 @@ const handleRestore = () => {
                       <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.85rem' }}>
                         <input type="checkbox" checked={backupDestLocal} onChange={(e) => setBackupDestLocal(e.target.checked)} style={{ marginRight: '8px' }} /> Download to Computer
                       </label>
+                      <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={backupDestArchive} onChange={(e) => setBackupDestArchive(e.target.checked)} style={{ marginRight: '8px' }} /> Save to Server Archive
+                      </label>
                     </div>
                   </div>
 
@@ -453,7 +476,7 @@ const handleRestore = () => {
                       </optgroup>
                     </select>
 
-                    <input type="text" placeholder="Prefix (e.g., Pre-Maintenance)" value={maintBackupName} onChange={e => setMaintBackupName(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px', marginBottom: '15px' }} disabled={!backupDestLocal} />
+                    <input type="text" placeholder="Prefix (e.g., Pre-Maintenance)" value={maintBackupName} onChange={e => setMaintBackupName(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px', marginBottom: '15px' }} disabled={!backupDestLocal && !backupDestArchive} />
                     
                     <button onClick={handleSingleBackup} disabled={isBackingUp} style={{ width: '100%', padding: '10px', backgroundColor: isBackingUp ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: isBackingUp ? 'wait' : 'pointer', fontWeight: 'bold' }}>
                       {isBackingUp ? 'Executing Backup...' : 'Run Single Backup'}
@@ -514,11 +537,53 @@ const handleRestore = () => {
                 {/* --- RIGHT PANEL: RESTORE --- */}
                 <div style={{ flex: 1, backgroundColor: '#252526', padding: '25px', borderRadius: '8px', border: '1px solid #333' }}>
                   <h3 style={{ marginTop: 0, color: '#e6a23c', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Restore Operations</h3>
-                  <div style={{ marginBottom: '20px' }}>
-                    <h4 style={{ color: '#fff', marginBottom: '10px' }}>1. Upload Configuration File</h4>
-                    <p style={{ fontSize: '0.85rem', color: '#aaa', marginTop: 0 }}>Select a previously downloaded `.cfg` or `.txt` file.</p>
-                    <input type="file" onChange={e => setMaintRestoreFile(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #555', borderRadius: '4px', color: '#ccc' }} />
-                  </div>
+                    <div style={{ marginBottom: '20px' }}>
+                      <h4 style={{ color: '#fff', marginBottom: '10px' }}>1. Select Configuration Version</h4>
+                      <div style={{ display: 'flex', gap: '15px', marginBottom: '10px' }}>
+                        <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#ccc', fontSize: '0.9rem' }}>
+                          <input type="radio" checked={maintRestoreMode === 'archive'} onChange={() => setMaintRestoreMode('archive')} style={{ marginRight: '8px' }}/> Server Archive
+                        </label>
+                        <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', color: '#ccc', fontSize: '0.9rem' }}>
+                          <input type="radio" checked={maintRestoreMode === 'upload'} onChange={() => setMaintRestoreMode('upload')} style={{ marginRight: '8px' }}/> Local Upload
+                        </label>
+                      </div>
+
+                      {maintRestoreMode === 'archive' ? (
+                       <div style={{ display: 'flex', gap: '10px' }}>
+                          
+                          {/* Dropdown 1: Select OS */}
+                          <select value={maintRestoreOs} onChange={e => {setMaintRestoreOs(e.target.value); setMaintRestoreHost(''); setMaintRestoreFile('')}} style={{ flex: 1, padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #555', borderRadius: '4px', textTransform: 'capitalize' }}>
+                            <option value="">-- OS --</option>
+                            {Object.keys(archiveFiles).map(os => <option key={os} value={os}>{os}</option>)}
+                          </select>
+                          
+                          {/* Dropdown 2: Select Hostname (Grouped by Device Type) */}
+                          <select value={maintRestoreHost} onChange={e => {setMaintRestoreHost(e.target.value); setMaintRestoreFile('')}} disabled={!maintRestoreOs} style={{ flex: 1, padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #555', borderRadius: '4px' }}>
+                            <option value="">-- Device --</option>
+                            {maintRestoreOs && archiveFiles[maintRestoreOs] && Object.entries(archiveFiles[maintRestoreOs]).map(([devType, hostsObj]) => (
+                               <optgroup key={devType} label={devType === 'switch' ? 'Switches' : devType === 'router' ? 'Routers' : devType.toUpperCase()}>
+{                                 Object.keys(hostsObj).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(host => (
+                                       <option key={host} value={host}>{host}</option>
+                                   ))}
+                               </optgroup>
+                            ))}
+                          </select>
+                          
+                          {/* Dropdown 3: Select Version (Filtered to the selected Hostname) */}
+                          <select value={maintRestoreFile} onChange={e => setMaintRestoreFile(e.target.value)} disabled={!maintRestoreHost} style={{ flex: 2, padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #e6a23c', borderRadius: '4px' }}>
+                            <option value="">-- Select File from Archive --</option>
+                            {maintRestoreOs && maintRestoreHost && 
+                              Object.values(archiveFiles[maintRestoreOs])
+                                .find(hostsObj => hostsObj[maintRestoreHost])?.[maintRestoreHost]
+                                ?.sort().reverse().map(f => <option key={f} value={f}>{f.replace('.txt', '')}</option>)
+                            }
+                          </select>
+
+                       </div>
+                    ) : (
+                      <input type="file" onChange={e => setMaintRestoreUpload(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #555', borderRadius: '4px', color: '#ccc' }} />
+                    )}
+                    </div>
                   <div style={{ marginBottom: '25px' }}>
                     <h4 style={{ color: '#fff', marginBottom: '10px' }}>2. Select Target Devices</h4>
                     <p style={{ fontSize: '0.85rem', color: '#aaa', marginTop: 0 }}>Choose which devices will receive this configuration.</p>
@@ -580,7 +645,7 @@ const handleRestore = () => {
                 
                 {/* --- LEFT SIDE: FILE 1 --- */}
                 <div style={{ flex: 1, backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333' }}>
-                  <h3 style={{ marginTop: 0, color: '#e6a23c', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Baseline (File 1)</h3>
+                  <h3 style={{ marginTop: 0, color: '#4caf50', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Baseline (File 1)</h3>
                   
                   <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
                     <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
@@ -603,15 +668,15 @@ const handleRestore = () => {
                       </select>
                       <select value={comp1Host} onChange={e => {setComp1Host(e.target.value); setComp1File('')}} disabled={!comp1Dev} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px' }}>
                         <option value="">-- Select Hostname --</option>
-                        {comp1Dev && archiveFiles[comp1Os][comp1Dev] && Object.keys(archiveFiles[comp1Os][comp1Dev]).map(h => <option key={h} value={h}>{h}</option>)}
+                        {comp1Dev && archiveFiles[comp1Os][comp1Dev] && Object.keys(archiveFiles[comp1Os][comp1Dev]).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                      <select value={comp1File} onChange={e => setComp1File(e.target.value)} disabled={!comp1Host} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #e6a23c', borderRadius: '4px' }}>
+                      <select value={comp1File} onChange={e => setComp1File(e.target.value)} disabled={!comp1Host} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #4caf50', borderRadius: '4px' }}>
                         <option value="">-- Select Backup Version --</option>
                         {comp1Host && archiveFiles[comp1Os][comp1Dev][comp1Host].map(f => <option key={f} value={f}>{f.replace('.txt', '')}</option>)}
                       </select>
                     </div>
                   ) : (
-                    <input type="file" onChange={e => setComp1Upload(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #e6a23c', borderRadius: '4px', color: '#ccc' }} />
+                    <input type="file" onChange={e => setComp1Upload(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #4caf50', borderRadius: '4px', color: '#ccc' }} />
                   )}
                 </div>
 
@@ -624,7 +689,7 @@ const handleRestore = () => {
 
                 {/* --- RIGHT SIDE: FILE 2 --- */}
                 <div style={{ flex: 1, backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333' }}>
-                  <h3 style={{ marginTop: 0, color: '#4caf50', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Target (File 2)</h3>
+                  <h3 style={{ marginTop: 0, color: '#007caf', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Target (File 2)</h3>
                   
                   <div style={{ display: 'flex', gap: '15px', marginBottom: '20px' }}>
                     <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
@@ -647,22 +712,22 @@ const handleRestore = () => {
                       </select>
                       <select value={comp2Host} onChange={e => {setComp2Host(e.target.value); setComp2File('')}} disabled={!comp2Dev} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px' }}>
                         <option value="">-- Select Hostname --</option>
-                        {comp2Dev && archiveFiles[comp2Os][comp2Dev] && Object.keys(archiveFiles[comp2Os][comp2Dev]).map(h => <option key={h} value={h}>{h}</option>)}
+                        {comp2Dev && archiveFiles[comp2Os][comp2Dev] && Object.keys(archiveFiles[comp2Os][comp2Dev]).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(h => <option key={h} value={h}>{h}</option>)}
                       </select>
-                      <select value={comp2File} onChange={e => setComp2File(e.target.value)} disabled={!comp2Host} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #4caf50', borderRadius: '4px' }}>
+                      <select value={comp2File} onChange={e => setComp2File(e.target.value)} disabled={!comp2Host} style={{ padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #007acc', borderRadius: '4px' }}>
                         <option value="">-- Select Backup Version --</option>
                         {comp2Host && archiveFiles[comp2Os][comp2Dev][comp2Host].map(f => <option key={f} value={f}>{f.replace('.txt', '')}</option>)}
                       </select>
                     </div>
                   ) : (
-                    <input type="file" onChange={e => setComp2Upload(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #4caf50', borderRadius: '4px', color: '#ccc' }} />
+                    <input type="file" onChange={e => setComp2Upload(e.target.files[0])} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', border: '1px dashed #007acc', borderRadius: '4px', color: '#ccc' }} />
                   )}
                 </div>
               </div>
 
               {/* Diff Output Window */}
               {diffHtml && (
-                <div style={{ marginTop: '30px', backgroundColor: '#fff', color: '#000', padding: '20px', borderRadius: '8px', border: '1px solid #333', overflowX: 'auto' }}
+                <div style={{ marginTop: '30px', backgroundColor: '#1e1e1e', color: '#fff', padding: '20px', borderRadius: '8px', border: '1px solid #444', overflowX: 'auto' }}
                      dangerouslySetInnerHTML={{ __html: diffHtml }} 
                 />
               )}

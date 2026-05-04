@@ -41,6 +41,8 @@ class BackupOptions(BaseModel):
     save_nvram: bool
     save_flash: bool
     download_local: bool
+    save_archive: bool
+    prefix: Optional[str] = ""
 
 class BulkBackupRequest(BaseModel):
     device_ids: list[int]
