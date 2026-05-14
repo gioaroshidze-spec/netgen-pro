@@ -50,7 +50,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     });
   };
 
-  // --- STREAMING SIMULATION ENGINE ---
+// --- STREAMING SIMULATION ENGINE ---
   const handleSimulate = async () => {
     if (!generatedAiConfig) return alert("Please generate a configuration first.");
     if (selectedSwitches.length === 0 && selectedRouters.length === 0) return alert("Please select target devices from the sidebar.");
@@ -77,18 +77,24 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
       // Read the stream chunk by chunk
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
+      let buffer = ""; // NEW: Buffer to hold incomplete network chunks
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
+        // Add the new chunk to whatever was left over in the buffer
+        buffer += decoder.decode(value, { stream: true });
         
-        // Split the chunk by the SSE format "data: ... \n\n"
-        const lines = chunk.split('\n\n');
-        for (let line of lines) {
-          if (line.startsWith('data: ')) {
-            const cleanText = line.replace('data: ', '');
+        // Split by our double-newline delimiter
+        const parts = buffer.split('\n\n');
+        
+        // The last part might be an incomplete network chunk, so pop it off and leave it in the buffer for next time!
+        buffer = parts.pop(); 
+
+        for (let part of parts) {
+          if (part.startsWith('data: ')) {
+            const cleanText = part.substring(6); // Safely remove 'data: '
             setSimulationLogs(prev => [...prev, cleanText]);
           }
         }

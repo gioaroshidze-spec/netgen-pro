@@ -170,7 +170,17 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
 """
             for cmd in raw_commands:
                 playbook_content += f"          - {cmd}\n"
+            
+            # --- NEW: EXPLICITLY CAPTURE AND PRINT THE RESULTS ---
+            playbook_content += """
+      register: config_result
 
+    - name: PRINT SIMULATION DIFF AND COMMANDS
+      debug:
+        var: config_result
+"""
+
+            # ... (keep your existing playbook generation code here) ...
             with open(playbook_path, 'w') as f:
                 f.write(playbook_content)
 
@@ -184,31 +194,29 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             env["ANSIBLE_FORCE_COLOR"] = "0" 
-            env["ANSIBLE_DEPRECATION_WARNINGS"] = "False"  # Kills the 'to_bytes' warning
-            env["ANSIBLE_STDOUT_CALLBACK"] = "yaml"        # Forces beautiful, readable terminal output
 
             cmd = [
                 "ansible-playbook", 
                 "-i", inventory_path, 
                 playbook_path, 
                 "--check", 
-                "--diff",
-                "-v"
+                "--diff"  # We can even drop the -v flag now!
             ]
 
-            # subprocess.PIPE lets us read the terminal output i nreal-time
             process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.STDOUT, 
+                text=True, 
+                bufsize=1, 
+                universal_newlines=True,
+                env=env
             )
 
             # Yield each line as it prints to the terminal
             for line in process.stdout:
-                yield f"data: {line}\n\n"
+                clean_line = line.rstrip('\r\n')
+                yield f"data: {clean_line}\n\n"
 
             process.stdout.close()
             process.wait()
