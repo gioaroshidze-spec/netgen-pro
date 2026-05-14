@@ -1,10 +1,22 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 export default function Configuration({ selectedSwitches, selectedRouters }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [generatedAiConfig, setGeneratedAiConfig] = useState('');
-  const [isEditing, setIsEditing] = useState(false); // NEW STATE FOR EDIT MODE
+  const [isEditing, setIsEditing] = useState(false);
+
+  // --- SIMULATION STATES ---
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationLogs, setSimulationLogs] = useState([]);
+  const terminalEndRef = useRef(null); // Used to auto-scroll the terminal
+
+  // Auto-scroll the terminal to the bottom whenever new logs arrive
+  useEffect(() => {
+    if (terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [simulationLogs]);
 
   const handleGenerateConfig = () => {
     if (!aiPrompt) return alert("Please enter a prompt first.");
@@ -29,13 +41,64 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     .then(data => {
       setGeneratedAiConfig(data.config);
       setIsAiGenerating(false);
-      setIsEditing(false); // Ensure we are in read-only mode after generating
+      setIsEditing(false);
     })
     .catch(err => { 
       console.error(err); 
       alert(`Generation Failed: ${err.message}`); 
       setIsAiGenerating(false); 
     });
+  };
+
+  // --- STREAMING SIMULATION ENGINE ---
+  const handleSimulate = async () => {
+    if (!generatedAiConfig) return alert("Please generate a configuration first.");
+    if (selectedSwitches.length === 0 && selectedRouters.length === 0) return alert("Please select target devices from the sidebar.");
+
+    setIsSimulating(true);
+    setSimulationLogs([]); // Clear old logs
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/configuration/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          config_text: generatedAiConfig,
+          switches: selectedSwitches,
+          routers: selectedRouters
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || "Simulation failed to start.");
+      }
+
+      // Read the stream chunk by chunk
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        
+        // Split the chunk by the SSE format "data: ... \n\n"
+        const lines = chunk.split('\n\n');
+        for (let line of lines) {
+          if (line.startsWith('data: ')) {
+            const cleanText = line.replace('data: ', '');
+            setSimulationLogs(prev => [...prev, cleanText]);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      setSimulationLogs(prev => [...prev, `\n[ERROR]: ${err.message}`]);
+    } finally {
+      setIsSimulating(false);
+    }
   };
 
   // Helper function to colorize comments
@@ -49,7 +112,6 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     });
   };
 
-  // Default placeholder text when nothing is generated yet
   const getPlaceholderText = () => {
     if (selectedSwitches.length > 0 || selectedRouters.length > 0) {
       return `! Ready to generate config for:\n! Switches: ${selectedSwitches.join(', ') || 'None'}\n! Routers: ${selectedRouters.join(', ') || 'None'}`;
@@ -60,6 +122,8 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
       <h2>AI Configuration Engine</h2>
+      
+      {/* 1. PROMPT BOX */}
       <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
         <textarea 
           placeholder="e.g., 'Configure VLAN 10 named GUEST and VLAN 20 named IOT...'" 
@@ -78,21 +142,20 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
         </div>
       </div>
       
+      {/* 2. CONFIGURATION BOX */}
       <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h3 style={{ margin: 0 }}>Generated Configuration</h3>
           
-          {/* EDIT / SAVE TOGGLE BUTTON */}
           <button 
             onClick={() => setIsEditing(!isEditing)}
-            disabled={!generatedAiConfig && !isEditing} // Only allow edit if there is text
+            disabled={!generatedAiConfig && !isEditing}
             style={{ padding: '6px 15px', backgroundColor: isEditing ? '#4caf50' : '#e6a23c', color: isEditing ? 'white' : 'black', border: 'none', borderRadius: '4px', cursor: (!generatedAiConfig && !isEditing) ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}
           >
             {isEditing ? '💾 Save Changes' : '✏️ Edit Config'}
           </button>
         </div>
 
-        {/* CONDITIONALLY RENDER TEXTAREA OR PRE */}
         {isEditing ? (
           <textarea 
             value={generatedAiConfig}
@@ -104,7 +167,41 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
             {generatedAiConfig ? formatConfigText(generatedAiConfig) : formatConfigText(getPlaceholderText())}
           </pre>
         )}
+
+        {/* SIMULATE BUTTON */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
+          <button 
+            onClick={handleSimulate} 
+            disabled={isSimulating || !generatedAiConfig} 
+            style={{ 
+              padding: '10px 20px', 
+              backgroundColor: (isSimulating || !generatedAiConfig) ? '#555' : '#007acc', 
+              color: (isSimulating || !generatedAiConfig) ? '#aaa' : 'white', 
+              border: 'none', 
+              borderRadius: '4px', 
+              cursor: (isSimulating || !generatedAiConfig) ? 'not-allowed' : 'pointer', 
+              fontWeight: 'bold' 
+            }}
+          >
+            {isSimulating ? 'Simulating...' : '🧪 Simulate Changes (--check)'}
+          </button>
+        </div>
       </div>
+
+      {/* 3. TERMINAL OUTPUT BOX */}
+      {(simulationLogs.length > 0 || isSimulating) && (
+        <div style={{ backgroundColor: '#000', padding: '15px', borderRadius: '8px', border: '2px solid #555', marginBottom: '20px' }}>
+          <h4 style={{ color: '#aaa', margin: '0 0 10px 0', borderBottom: '1px solid #333', paddingBottom: '5px' }}>Terminal Output (Ansible Dry-Run)</h4>
+          <div style={{ maxHeight: '300px', overflowY: 'auto', color: '#00ff00', fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>
+            {simulationLogs.map((log, index) => (
+              <div key={index} style={{ minHeight: '1.2em', wordBreak: 'break-all' }}>{log}</div>
+            ))}
+            {/* Invisible div to force scroll to bottom */}
+            <div ref={terminalEndRef} />
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

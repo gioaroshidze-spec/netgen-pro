@@ -53,3 +53,8 @@ class AIConfigGenerate(BaseModel):
     prompt: str
     switches: list[str]
     routers: list[str]
+
+class SimulateConfigRequest(BaseModel):
+    config_text: str
+    switches: list[str]
+    routers: list[str]
