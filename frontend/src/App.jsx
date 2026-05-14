@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import Inventory from './components/Inventory'
 import Compare from './components/Compare'
 import Maintenance from './components/Maintenance'
+import Configuration from './components/Configuration'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
@@ -20,8 +21,7 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState({})
   
-  // Configuration Tab States
-  const [aiPrompt, setAiPrompt] = useState('')
+  // Configuration Target States (Used by Sidebar and passed to Configuration tab)
   const [selectedSwitches, setSelectedSwitches] = useState([])
   const [selectedRouters, setSelectedRouters] = useState([])
   
@@ -166,21 +166,7 @@ function App() {
           {activeTab === 'Compare' && <Compare archiveFiles={archiveFiles} />}
 
           {/* TAB: CONFIGURATION */}
-          {activeTab === 'Configuration' && (
-             <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
-             <h2>AI Configuration Engine</h2>
-             <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
-               <textarea placeholder="e.g., 'Configure VLAN 10 and 20...'" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} style={{ width: '100%', height: '100px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', padding: '15px', borderRadius: '4px', resize: 'vertical' }} />
-               <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}><button style={{ padding: '10px 20px', backgroundColor: '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Generate Logic</button></div>
-             </div>
-             <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
-               <h3 style={{ marginTop: 0 }}>Generated Configuration</h3>
-               <pre style={{ backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '4px', color: '#d4d4d4', overflowX: 'auto', border: '1px solid #444', minHeight: '100px' }}>
-                 {selectedSwitches.length > 0 || selectedRouters.length > 0 ? `! Ready to generate config for:\n! Switches: ${selectedSwitches.join(', ') || 'None'}\n! Routers: ${selectedRouters.join(', ') || 'None'}` : `! Please select target devices from the sidebar...`}
-               </pre>
-             </div>
-           </div>
-          )}
+          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} />}
 
           {/* TAB: INVENTORY */}
           {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} />}
