@@ -9,7 +9,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
   // --- SIMULATION STATES ---
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationLogs, setSimulationLogs] = useState([]);
-  const terminalEndRef = useRef(null); // Used to auto-scroll the terminal
+  const terminalEndRef = useRef(null); 
 
   // Auto-scroll the terminal to the bottom whenever new logs arrive
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     });
   };
 
-// --- STREAMING SIMULATION ENGINE ---
+  // --- STREAMING SIMULATION ENGINE ---
   const handleSimulate = async () => {
     if (!generatedAiConfig) return alert("Please generate a configuration first.");
     if (selectedSwitches.length === 0 && selectedRouters.length === 0) return alert("Please select target devices from the sidebar.");
@@ -77,24 +77,19 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
       // Read the stream chunk by chunk
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
-      let buffer = ""; // NEW: Buffer to hold incomplete network chunks
+      let buffer = ""; 
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Add the new chunk to whatever was left over in the buffer
         buffer += decoder.decode(value, { stream: true });
-        
-        // Split by our double-newline delimiter
         const parts = buffer.split('\n\n');
-        
-        // The last part might be an incomplete network chunk, so pop it off and leave it in the buffer for next time!
         buffer = parts.pop(); 
 
         for (let part of parts) {
           if (part.startsWith('data: ')) {
-            const cleanText = part.substring(6); // Safely remove 'data: '
+            const cleanText = part.substring(6); 
             setSimulationLogs(prev => [...prev, cleanText]);
           }
         }
@@ -107,22 +102,12 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     }
   };
 
-  // Helper function to colorize comments
-  const formatConfigText = (text) => {
-    if (!text) return null;
-    return text.split('\n').map((line, index) => {
-      if (line.trim().startsWith('!')) {
-        return <span key={index} style={{ color: '#569cd6' }}>{line}<br/></span>;
-      }
-      return <span key={index}>{line}<br/></span>;
-    });
-  };
-
+  // Default placeholder text in valid JSON format
   const getPlaceholderText = () => {
     if (selectedSwitches.length > 0 || selectedRouters.length > 0) {
-      return `! Ready to generate config for:\n! Switches: ${selectedSwitches.join(', ') || 'None'}\n! Routers: ${selectedRouters.join(', ') || 'None'}`;
+      return `{\n  "//_info": "Ready to generate JSON Data Model for:",\n  "//_switches": "${selectedSwitches.join(', ') || 'None'}",\n  "//_routers": "${selectedRouters.join(', ') || 'None'}"\n}`;
     }
-    return `! Please select target devices from the sidebar and enter a prompt...`;
+    return `{\n  "//_info": "Please select target devices from the sidebar and enter a prompt..."\n}`;
   };
 
   return (
@@ -162,15 +147,16 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
           </button>
         </div>
 
+        {/* CONDITIONALLY RENDER TEXTAREA OR PRE */}
         {isEditing ? (
           <textarea 
             value={generatedAiConfig}
             onChange={(e) => setGeneratedAiConfig(e.target.value)}
-            style={{ width: '100%', minHeight: '200px', backgroundColor: '#1e1e1e', color: '#d4d4d4', border: '1px solid #007acc', padding: '15px', borderRadius: '4px', resize: 'vertical', fontFamily: 'monospace', outline: 'none' }}
+            style={{ width: '100%', minHeight: '300px', backgroundColor: '#1e1e1e', color: '#d4d4d4', border: '1px solid #007acc', padding: '15px', borderRadius: '4px', resize: 'vertical', fontFamily: 'monospace', outline: 'none' }}
           />
         ) : (
-          <pre style={{ backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '4px', color: '#d4d4d4', overflowX: 'auto', border: '1px solid #444', minHeight: '150px', fontFamily: 'monospace', margin: 0 }}>
-            {generatedAiConfig ? formatConfigText(generatedAiConfig) : formatConfigText(getPlaceholderText())}
+          <pre style={{ backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '4px', color: '#569cd6', overflowX: 'auto', border: '1px solid #444', minHeight: '300px', fontFamily: 'monospace', margin: 0 }}>
+            {generatedAiConfig ? generatedAiConfig : getPlaceholderText()}
           </pre>
         )}
 
@@ -181,7 +167,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
             disabled={isSimulating || !generatedAiConfig} 
             style={{ 
               padding: '10px 20px', 
-              backgroundColor: (isSimulating || !generatedAiConfig) ? '#555' : '#007acc', 
+              backgroundColor: (isSimulating || !generatedAiConfig) ? '#555' : '#9c27b0', 
               color: (isSimulating || !generatedAiConfig) ? '#aaa' : 'white', 
               border: 'none', 
               borderRadius: '4px', 
