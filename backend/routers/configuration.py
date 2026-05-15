@@ -177,7 +177,11 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
 
     - name: PRINT SIMULATION DIFF AND COMMANDS
       debug:
-        var: config_result
+        msg:
+          changed: "{{ config_result.changed | default(false) }}"
+          commands: "{{ config_result.commands | default([]) }}"
+          updates: "{{ config_result.updates | default([]) }}"
+          warnings: "{{ config_result.warnings | default([]) }}"
 """
 
             # ... (keep your existing playbook generation code here) ...

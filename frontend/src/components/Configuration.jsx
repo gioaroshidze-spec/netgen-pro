@@ -198,7 +198,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
       {(simulationLogs.length > 0 || isSimulating) && (
         <div style={{ backgroundColor: '#000', padding: '15px', borderRadius: '8px', border: '2px solid #555', marginBottom: '20px' }}>
           <h4 style={{ color: '#aaa', margin: '0 0 10px 0', borderBottom: '1px solid #333', paddingBottom: '5px' }}>Terminal Output (Ansible Dry-Run)</h4>
-          <div style={{ maxHeight: '300px', overflowY: 'auto', color: '#00ff00', fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>
+          <div style={{ maxHeight: '600px', overflowY: 'auto', color: '#00ff00', fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>
             {simulationLogs.map((log, index) => (
               <div key={index} style={{ minHeight: '1.2em', wordBreak: 'break-all' }}>{log}</div>
             ))}

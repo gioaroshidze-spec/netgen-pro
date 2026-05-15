@@ -99,7 +99,7 @@ function App() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         
         {/* ================= DYNAMIC SIDEBAR ================= */}
-        <div style={{ width: '320px', backgroundColor: '#252526', padding: '1.5rem', borderRight: '1px solid #333', overflowY: 'auto' }}>
+        <div style={{ width: '320px', backgroundColor: '#252526', padding: '1.5rem', borderRight: '1px solid #333', overflowY: 'auto', position: 'sticky', top: '0', height: '100vh'}}>
           <div style={{ marginBottom: '30px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
               <h3 style={{ margin: 0 }}>Connections</h3>
