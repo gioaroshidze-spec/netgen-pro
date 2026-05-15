@@ -10,6 +10,9 @@ import models
 import schemas
 from litellm import completion
 
+# IMPORT OUR NEW ENGINE
+from .ansible_engine import run_ansible_playbook
+
 router = APIRouter(tags=["Configuration Engine"])
 
 @router.post("/configuration/generate")
@@ -25,18 +28,22 @@ def generate_configuration(request: schemas.AIConfigGenerate):
     switches_str = ", ".join(request.switches) if request.switches else "None"
     routers_str = ", ".join(request.routers) if request.routers else "None"
 
-    # 2. Define the System Prompt (The "Rules" for the AI)
+# 2. Define the System Prompt (The "Rules" for the AI)
     system_prompt = (
         "You are an expert Enterprise Network Automation API. "
-        "Your job is to read the network requirement and the provided running configs, and output the desired configuration state. "
+        "Your job is to read the network requirement and the provided running configs, and output the desired state. "
         "CRITICAL RULES: "
-        "1. You MUST respond ONLY with a raw, valid JSON object. Do not include markdown formatting (like ```json), code blocks, or conversational text. "
-        "2. The JSON object must map the exact target device hostnames to a list of exact Cisco IOS configuration commands (or Aruba/HPE/Mikrotik if specified). "
-        "3. Only generate commands that strictly fulfill the user's explicit request. Do NOT add unprompted cleanup commands. "
+        "1. You MUST respond ONLY with a raw, valid JSON object. No markdown, no code blocks, no conversational text. "
+        "2. The JSON object must map exact hostnames to a dictionary containing TWO keys: 'config' and 'exec'. "
+        "3. The JSON object must map the exact target device hostnames to a list of exact Cisco IOS configuration commands (or Aruba/HPE/Mikrotik if specified). "
+        "4. The 'config' list is strictly for Global Configuration mode commands (VLANs, interfaces, routing). Do not include 'conf t' or 'exit'. "
+        "5. The 'exec' list is strictly for Privileged EXEC mode commands (e.g., 'write memory', 'show vlan brief', 'copy run start'). "
         'Example format:\n'
         '{\n'
-        '  "cctv_sw1": ["vlan 10", " name servers", "interface range GigabitEthernet1/0/11 - 15", " switchport mode access", " switchport access vlan 10"],\n'
-        '  "cctv_sw2": ["no vlan 10", "interface range GigabitEthernet1/0/11 - 20", " no switchport access vlan"]\n'
+        '  "cctv_sw1": {\n'
+        '    "config": ["vlan 10", " name servers", "interface range GigabitEthernet1/0/11 - 15", " switchport access vlan 10"],\n'
+        '    "exec": ["write memory", "show vlan id 10"]\n'
+        '  }\n'
         '}'
     )
 
@@ -69,22 +76,28 @@ def generate_configuration(request: schemas.AIConfigGenerate):
 
     try:
         model_name = os.getenv("ACTIVE_AI_MODEL", "claude-opus-4-7") 
-        # Using LiteLLM's completion wrapper
+        # Using LiteLLM's completion wrapper (temperature removed for strict compatibility)
         response = completion(
             model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1 
+            ]
         )
         
         # 4. Extract and clean the JSON response
         raw_response = response.choices[0].message.content
-        clean_json = raw_response.replace("```json", "").replace("```", "").strip()
+        clean_text = raw_response.replace("```json", "").replace("```", "").strip()
         
-        # Return pure JSON text to the React UI
-        return {"status": "success", "config": clean_json}
+        # 5. Validate and Pretty-Print the JSON!
+        try:
+            parsed_json = json.loads(clean_text)
+            beautiful_json = json.dumps(parsed_json, indent=2) 
+            return {"status": "success", "config": beautiful_json}
+            
+        except json.JSONDecodeError:
+            print(f"Failed to parse AI output as JSON: {clean_text}")
+            raise HTTPException(status_code=500, detail="AI generated invalid JSON format. Please try generating again.")
     
     except Exception as e:
         print(f"LiteLLM Error: {str(e)}")
@@ -93,127 +106,41 @@ def generate_configuration(request: schemas.AIConfigGenerate):
 
 @router.post("/configuration/simulate")
 def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db)):
-    """
-    Parses the JSON data model, dynamically generates an Ansible playbook and inventory, 
-    runs it in --check mode, and streams the raw terminal output back to the client.    
-    """
+    """Runs the configuration through Ansible in strict --check mode."""
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
-    if not request.config_text.strip():
-        raise HTTPException(status_code=400, detail="No configuration text provided.")
     
-    # 1. Validate and Parse the JSON Data Model
     try:
         ai_config_data = json.loads(request.config_text)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Configuration is not valid JSON. Please generate logic or format as JSON.")
 
-    # 2. Fetch the target devices from the database
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
 
     if not devices:
         raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-    def generate_ansible_stream():
-        with tempfile.TemporaryDirectory() as temp_dir:
-            inventory_path = os.path.join(temp_dir, "inventory.yaml")
-            playbook_path = os.path.join(temp_dir, "playbook.yaml")
-            vars_path = os.path.join(temp_dir, "vars.json")
+    # Call the engine with check_mode = True
+    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, is_check_mode=True), media_type="text/event-stream")
 
-            # --- WRITE THE AI DATA MODEL TO A VARS FILE ---
-            with open(vars_path, 'w') as f:
-                json.dump({"ai_config": ai_config_data}, f)
 
-            # --- BUILD DYNAMIC INVENTORY ---
-            inventory_data = {"all": {"hosts": {}}}
-            for dev in devices:
-                ansible_os = "cisco.ios.ios"
-                if dev.os_type == "aruba": ansible_os = "arubanetworks.aoscx.aoscx"
-                elif dev.os_type == "hpe": ansible_os = "community.network.ce" 
-                
-                inventory_data["all"]["hosts"][dev.hostname] = {
-                    "ansible_host": dev.ip_address,
-                    "ansible_network_os": ansible_os,
-                    "ansible_connection": "network_cli",
-                    "ansible_network_cli_ssh_type": "paramiko", # Supports legacy Cisco crypto
-                    "ansible_user": dev.username or "admin",
-                    "ansible_password": os.getenv("DEVICE_PASSWORD", "Werfds123"),
-                    "ansible_ssh_common_args": "-o MACs=+hmac-sha1 -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa"
-                }
-            
-            with open(inventory_path, 'w') as f:
-                f.write("all:\n  hosts:\n")
-                for host, vars_dict in inventory_data["all"]["hosts"].items():
-                    f.write(f"    {host}:\n")
-                    for k, v in vars_dict.items():
-                        f.write(f"      {k}: {v}\n")
+@router.post("/configuration/push")
+def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db)):
+    """Pushes the configuration live to the hardware."""
+    if not request.switches and not request.routers:
+        raise HTTPException(status_code=400, detail="No target devices selected.")
+    
+    try:
+        ai_config_data = json.loads(request.config_text)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Configuration is not valid JSON. Please generate logic or format as JSON.")
 
-            # --- BUILD DATA-DRIVEN PLAYBOOK ---
-            playbook_content = """
-- name: VNMS JSON Data Model Deployment
-  hosts: all
-  gather_facts: no
-  vars_files:
-    - vars.json
-  tasks:
-    - name: Apply Config from AI JSON Model
-      cisco.ios.ios_config:
-        lines: "{{ ai_config[inventory_hostname] }}"
-      when: inventory_hostname in ai_config and ai_config[inventory_hostname] | length > 0
-      register: config_result
+    target_hostnames = request.switches + request.routers
+    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
 
-    - name: PRINT SIMULATION DIFF AND COMMANDS
-      debug:
-        msg:
-          changed: "{{ config_result.changed | default(false) }}"
-          commands: "{{ config_result.commands | default([]) }}"
-          updates: "{{ config_result.updates | default([]) }}"
-      when: inventory_hostname in ai_config and ai_config[inventory_hostname] | length > 0
-"""
-            with open(playbook_path, 'w') as f:
-                f.write(playbook_content)
+    if not devices:
+        raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-            yield "data: --- INITIALIZING VNMS SIMULATION ENGINE ---\n\n"
-            yield "data: Compiling JSON data model, inventory, and playbook...\n\n"
-            yield f"data: Target Devices: {', '.join([d.hostname for d in devices])}\n\n"
-            yield "data: Executing Ansible Data-Driven dry-run (--check)...\n\n"
-            yield "data: --------------------------------------------------\n\n"
-
-            # --- RUN ANSIBLE AND STREAM OUTPUT ---
-            env = os.environ.copy()
-            env["PYTHONUNBUFFERED"] = "1"
-            env["ANSIBLE_FORCE_COLOR"] = "0" 
-
-            cmd = [
-                "ansible-playbook", 
-                "-i", inventory_path, 
-                playbook_path, 
-                "--check", 
-                "--diff"
-            ]
-
-            process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT, 
-                text=True, 
-                bufsize=1, 
-                universal_newlines=True,
-                env=env
-            )
-
-            for line in process.stdout:
-                clean_line = line.rstrip('\r\n')
-                yield f"data: {clean_line}\n\n"
-
-            process.stdout.close()
-            process.wait()
-
-            yield "data: --------------------------------------------------\n\n"
-            if process.returncode == 0:
-                yield "data: SIMULATION COMPLETE: No syntax errors detected in Data Model.\n\n"
-            else:
-                yield "data: SIMULATION FINISHED WITH ERRORS. Review the logs above.\n\n"
-
-    return StreamingResponse(generate_ansible_stream(), media_type="text/event-stream")
+    # Call the exact same engine, but with check_mode = False!
+    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, is_check_mode=False), media_type="text/event-stream")

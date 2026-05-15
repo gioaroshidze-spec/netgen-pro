@@ -6,9 +6,10 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
   const [generatedAiConfig, setGeneratedAiConfig] = useState('');
   const [isEditing, setIsEditing] = useState(false);
 
-  // --- SIMULATION STATES ---
+  // --- EXECUTION STATES ---
   const [isSimulating, setIsSimulating] = useState(false);
-  const [simulationLogs, setSimulationLogs] = useState([]);
+  const [isPushing, setIsPushing] = useState(false);
+  const [terminalLogs, setTerminalLogs] = useState([]);
   const terminalEndRef = useRef(null); 
 
   // Auto-scroll the terminal to the bottom whenever new logs arrive
@@ -16,7 +17,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     if (terminalEndRef.current) {
       terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [simulationLogs]);
+  }, [terminalLogs]);
 
   const handleGenerateConfig = () => {
     if (!aiPrompt) return alert("Please enter a prompt first.");
@@ -50,16 +51,27 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     });
   };
 
-  // --- STREAMING SIMULATION ENGINE ---
-  const handleSimulate = async () => {
+  // --- UNIFIED STREAMING ENGINE (SIMULATE & PUSH) ---
+  const executeConfig = async (mode) => {
     if (!generatedAiConfig) return alert("Please generate a configuration first.");
     if (selectedSwitches.length === 0 && selectedRouters.length === 0) return alert("Please select target devices from the sidebar.");
 
-    setIsSimulating(true);
-    setSimulationLogs([]); // Clear old logs
+    // SAFETY NET: Confirm before pushing live!
+    if (mode === 'push') {
+      const confirmPush = window.confirm("🚨 WARNING: You are about to push this configuration live to production devices. Are you absolutely sure?");
+      if (!confirmPush) return;
+      setIsPushing(true);
+    } else {
+      setIsSimulating(true);
+    }
+
+    setTerminalLogs([]); // Clear old logs
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/configuration/simulate', {
+      // Dynamically select the API route based on the mode
+      const endpoint = mode === 'push' ? '/configuration/push' : '/configuration/simulate';
+      
+      const response = await fetch(`http://127.0.0.1:8000${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -71,7 +83,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
 
       if (!response.ok) {
         const errData = await response.json();
-        throw new Error(errData.detail || "Simulation failed to start.");
+        throw new Error(errData.detail || "Execution failed to start.");
       }
 
       // Read the stream chunk by chunk
@@ -90,15 +102,16 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
         for (let part of parts) {
           if (part.startsWith('data: ')) {
             const cleanText = part.substring(6); 
-            setSimulationLogs(prev => [...prev, cleanText]);
+            setTerminalLogs(prev => [...prev, cleanText]);
           }
         }
       }
     } catch (err) {
       console.error(err);
-      setSimulationLogs(prev => [...prev, `\n[ERROR]: ${err.message}`]);
+      setTerminalLogs(prev => [...prev, `\n[ERROR]: ${err.message}`]);
     } finally {
-      setIsSimulating(false);
+      if (mode === 'push') setIsPushing(false);
+      else setIsSimulating(false);
     }
   };
 
@@ -109,6 +122,8 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
     }
     return `{\n  "//_info": "Please select target devices from the sidebar and enter a prompt..."\n}`;
   };
+
+  const isBusy = isSimulating || isPushing || !generatedAiConfig;
 
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
@@ -125,8 +140,8 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
           <button 
             onClick={handleGenerateConfig} 
-            disabled={isAiGenerating} 
-            style={{ padding: '10px 20px', backgroundColor: isAiGenerating ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: isAiGenerating ? 'wait' : 'pointer', fontWeight: 'bold' }}
+            disabled={isAiGenerating || isPushing || isSimulating} 
+            style={{ padding: '10px 20px', backgroundColor: (isAiGenerating || isPushing || isSimulating) ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: (isAiGenerating || isPushing || isSimulating) ? 'wait' : 'pointer', fontWeight: 'bold' }}
           >
             {isAiGenerating ? 'Generating...' : 'Generate Logic'}
           </button>
@@ -136,7 +151,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
       {/* 2. CONFIGURATION BOX */}
       <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h3 style={{ margin: 0 }}>Generated Configuration</h3>
+          <h3 style={{ margin: 0 }}>Generated Configuration Model</h3>
           
           <button 
             onClick={() => setIsEditing(!isEditing)}
@@ -160,32 +175,48 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
           </pre>
         )}
 
-        {/* SIMULATE BUTTON */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px' }}>
+        {/* ACTION BUTTONS (SIMULATE & PUSH) */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '15px', gap: '15px' }}>
           <button 
-            onClick={handleSimulate} 
-            disabled={isSimulating || !generatedAiConfig} 
+            onClick={() => executeConfig('simulate')} 
+            disabled={isBusy} 
             style={{ 
               padding: '10px 20px', 
-              backgroundColor: (isSimulating || !generatedAiConfig) ? '#555' : '#9c27b0', 
-              color: (isSimulating || !generatedAiConfig) ? '#aaa' : 'white', 
+              backgroundColor: isBusy ? '#555' : '#007acc', 
+              color: isBusy ? '#aaa' : 'white', 
               border: 'none', 
               borderRadius: '4px', 
-              cursor: (isSimulating || !generatedAiConfig) ? 'not-allowed' : 'pointer', 
+              cursor: isBusy ? 'not-allowed' : 'pointer', 
               fontWeight: 'bold' 
             }}
           >
             {isSimulating ? 'Simulating...' : '🧪 Simulate Changes (--check)'}
           </button>
+          
+          <button 
+            onClick={() => executeConfig('push')} 
+            disabled={isBusy} 
+            style={{ 
+              padding: '10px 20px', 
+              backgroundColor: isBusy ? '#555' : '#d32f2f', // Aggressive Red for Production Push!
+              color: isBusy ? '#aaa' : 'white', 
+              border: 'none', 
+              borderRadius: '4px', 
+              cursor: isBusy ? 'not-allowed' : 'pointer', 
+              fontWeight: 'bold' 
+            }}
+          >
+            {isPushing ? 'Deploying...' : '🚀 Push to Production'}
+          </button>
         </div>
       </div>
 
       {/* 3. TERMINAL OUTPUT BOX */}
-      {(simulationLogs.length > 0 || isSimulating) && (
+      {(terminalLogs.length > 0 || isSimulating || isPushing) && (
         <div style={{ backgroundColor: '#000', padding: '15px', borderRadius: '8px', border: '2px solid #555', marginBottom: '20px' }}>
-          <h4 style={{ color: '#aaa', margin: '0 0 10px 0', borderBottom: '1px solid #333', paddingBottom: '5px' }}>Terminal Output (Ansible Dry-Run)</h4>
+          <h4 style={{ color: '#aaa', margin: '0 0 10px 0', borderBottom: '1px solid #333', paddingBottom: '5px' }}>Terminal Output</h4>
           <div style={{ maxHeight: '600px', overflowY: 'auto', color: '#00ff00', fontFamily: 'monospace', fontSize: '0.9rem', whiteSpace: 'pre-wrap' }}>
-            {simulationLogs.map((log, index) => (
+            {terminalLogs.map((log, index) => (
               <div key={index} style={{ minHeight: '1.2em', wordBreak: 'break-all' }}>{log}</div>
             ))}
             {/* Invisible div to force scroll to bottom */}
