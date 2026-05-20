@@ -26,3 +26,15 @@ class EventLog(Base):
     author = Column(String, default="System", index=True)
     target_devices = Column(JSON, default=list)  # JSON Array of hostnames: ["cctv_sw1", "cctv_sw2"]
     details = Column(JSON, default=dict)  # Flexible JSON payload for prompts, diffs, or simple messages
+
+# --- CONFIGURATION TEMPLATES MODEL ---
+
+class ConfiguraitonTemplate(Base):
+    __tablename__ = "configuration_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    category = Column(String, index=True)
+    description = Column(String)
+    payload = Column(JSON)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

@@ -30,7 +30,7 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
     switches_str = ", ".join(request.switches) if request.switches else "None"
     routers_str = ", ".join(request.routers) if request.routers else "None"
 
-    # 2. Define the System Prompt (The "Rules" for the AI)
+    # 2. Define the System Prompt
     system_prompt = (
         "You are an expert Enterprise Network Automation API. "
         "Your job is to read the network requirement and the provided running configs, and output the desired state. "
@@ -40,6 +40,7 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         "3. The JSON object must map the exact target device hostnames to a list of exact Cisco IOS configuration commands (or Aruba/HPE/Mikrotik if specified). "
         "4. The 'config' list is strictly for Global Configuration mode commands (VLANs, interfaces, routing). Do not include 'conf t' or 'exit'. "
         "5. The 'exec' list is strictly for Privileged EXEC mode commands (e.g., 'write memory', 'show vlan brief', 'copy run start'). "
+        "6. TEMPLATE OVERRIDE: If a base template is provided, you must strictly preserve its command structure. Your only job is to adapt the target hostnames, IP addresses, VLAN IDs, or ports as requested in the user prompt, while maintaining the exact architectural design of the template. "
         'Example format:\n'
         '{\n'
         '  "cctv_sw1": {\n'
@@ -56,6 +57,9 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
     
     Network Requirement: {request.prompt}
     """
+
+    if request.base_template:
+        user_prompt += f"\n\n--- BASE TEMPLATE PROVIDED ---\nAdapt the following configuration structure for the new targets and requirements:\n{json.dumps(request.base_template, indent=2)}"
 
     # --- NEW: LIVE RETRIEVAL-AUGMENTED GENERATION (RAG) ---
     device_context = ""

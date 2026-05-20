@@ -4,6 +4,8 @@ import Compare from './components/Compare'
 import Maintenance from './components/Maintenance'
 import Configuration from './components/Configuration'
 import EventLogs from './components/EventLogs'
+import Templates from './components/Templates'
+import CLI from './components/CLI'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
@@ -18,6 +20,8 @@ function App() {
     localStorage.setItem('vnmsActiveTab', activeTab)
   }, [activeTab])
   
+  const [loadedTemplate, setLoadedTemplate] = useState(null)
+
   const [devices, setDevices] = useState([])
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState({})
@@ -30,7 +34,7 @@ function App() {
   const [connectionSearch, setConnectionSearch] = useState('')
   const [dropdownSearch, setDropdownSearch] = useState('')
 
-  const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'Inventory', 'Event Logs']
+  const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
 
   // --- DATA FETCHING ---
   const fetchNetworkStatus = () => {
@@ -166,14 +170,22 @@ function App() {
           {/* TAB: COMPARE */}
           {activeTab === 'Compare' && <Compare archiveFiles={archiveFiles} />}
 
+          {/* TAB: TEMPLATES */}
+          {activeTab === 'Templates' && <Templates setActiveTab={setActiveTab} setLoadedTemplate={setLoadedTemplate} />}
+
           {/* TAB: CONFIGURATION */}
-          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} />}
+          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} loadedTemplate={loadedTemplate} setLoadedTemplate={setLoadedTemplate} />}
+          
+          {/* TAB: CLI */}
+          {activeTab === 'CLI' && <CLI devices={devices} />}
 
           {/* TAB: INVENTORY */}
           {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} />}
 
           {/* TAB: EVENT LOGS */}
           {activeTab === 'Event Logs' && <EventLogs />}
+
+          
         </div>
       </div>
     </div>

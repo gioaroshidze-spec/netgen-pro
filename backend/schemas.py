@@ -54,6 +54,7 @@ class AIConfigGenerate(BaseModel):
     prompt: str
     switches: list[str]
     routers: list[str]
+    base_template: Optional[dict] = None
 
 class SimulateConfigRequest(BaseModel):
     prompt: Optional[str] = "Manual Edit / No Prompt"
@@ -75,4 +76,18 @@ class EventLogResponse(EventLogCreate):
     timestamp: datetime
 
     class config:
+        from_attributes = True
+
+# --- CONFIGURATION TEMPLATE SCHEMAS ---
+class TemplateCreate(BaseModel):
+    name: str
+    category: str
+    payload: dict
+
+class TemplateResponse(TemplateCreate):
+    id: int
+    description: str
+    created_at: datetime
+
+    class Config:
         from_attributes = True
