@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, DateTime, JSON
 from database import Base
+from datetime import datetime, timezone
 
 class NetworkDevice(Base):
     # This is the actual name of the table inside the SQLite database
@@ -15,3 +16,13 @@ class NetworkDevice(Base):
 
     # Note: We will handle passwords and ssh keys securely later!
 
+class EventLog(Base):
+    __tablename__ = "event_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    event_type = Column(String, index=True)     # e.g., 'Configuration', 'Maintenance', 'Inventory', 'Auth'
+    severity = Column(String, index=True)       # e.g., 'INFO', 'SUCCESS', 'WARNING', 'ERROR'
+    author = Column(String, default="System", index=True)
+    target_devices = Column(JSON, default=list)  # JSON Array of hostnames: ["cctv_sw1", "cctv_sw2"]
+    details = Column(JSON, default=dict)  # Flexible JSON payload for prompts, diffs, or simple messages

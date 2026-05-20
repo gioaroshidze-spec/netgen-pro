@@ -75,6 +75,7 @@ export default function Configuration({ selectedSwitches, selectedRouters }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          prompt: aiPrompt,
           config_text: generatedAiConfig,
           switches: selectedSwitches,
           routers: selectedRouters

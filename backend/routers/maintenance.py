@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import tempfile
 import asyncio
 from typing import Optional
+from logger import log_event
 
 load_dotenv()
 
@@ -68,6 +69,12 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
             with open(archive_path, "w") as f:
                 f.write(config_data)
 
+        log_event(
+            db=db, event_type="Maintenance", severity="SUCCESS",
+            target_devices=[device.hostname],
+            details={"action": "Single Backup", "filename": strict_filename, "options": options.model_dump()}
+        )
+
         return {
             "hostname": device.hostname, 
             "config": config_data, 
@@ -75,6 +82,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
         }
     
     except Exception as e:
+        log_event(db=db, event_type="Maintenance", severity="ERROR", target_devices=[device.hostname], details={"action": "Single Backup Failed", "error": str(e)})
         raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
 
 # 8. Bulk Backup (POST)
@@ -131,6 +139,14 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
                         zip_file.writestr(f"{device.hostname}_ERROR.txt", f"Failed: {str(e)}")
 
     zip_buffer.seek(0)
+
+    # Log the successful bulk generation
+    target_hostnames = [d.hostname for d in db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(request.device_ids)).all()]
+    log_event(
+        db=db, event_type="Maintenance", severity="INFO",
+        target_devices=target_hostnames,
+        details={"action": "Bulk Backup Executed", "saved_to_archive": request.options.save_archive}
+    )
 
     if not request.options.download_local:
         return {"message": "Backup completed successfully on devices."}
@@ -264,8 +280,9 @@ async def restore_devices(
         # Decode the raw bytes into readable text
         output = stdout.decode()
 
-        if process. returncode != 0 and "unreachable" in output.lower():
+        if process.returncode != 0 and "unreachable" in output.lower():
+            log_event(db=db, event_type="Maintenance", severity="ERROR", target_devices=[d.hostname for d in devices], details={"action": "Configuration Restore Failed", "file": actual_filename, "logs": output})
             return {"message": "Ansible execution finished with errors", "logs": output}
         
+        log_event(db=db, event_type="Maintenance", severity="SUCCESS", target_devices=[d.hostname for d in devices], details={"action": "Configuration Restore Successful", "file": actual_filename, "logs": output})
         return {"message": "Restore Operations Completed", "logs": output}
-    

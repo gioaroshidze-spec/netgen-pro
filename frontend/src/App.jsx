@@ -3,6 +3,7 @@ import Inventory from './components/Inventory'
 import Compare from './components/Compare'
 import Maintenance from './components/Maintenance'
 import Configuration from './components/Configuration'
+import EventLogs from './components/EventLogs'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
@@ -171,6 +172,8 @@ function App() {
           {/* TAB: INVENTORY */}
           {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} />}
 
+          {/* TAB: EVENT LOGS */}
+          {activeTab === 'Event Logs' && <EventLogs />}
         </div>
       </div>
     </div>

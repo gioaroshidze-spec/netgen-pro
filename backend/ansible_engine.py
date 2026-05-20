@@ -2,15 +2,12 @@ import tempfile
 import subprocess
 import json
 import os
+from logger import log_event  # <-- Import the universal logger
 
-def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
+def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution", is_check_mode=True, author="System"):
     """
-    Dynamically generates an Ansible playbook that routes 'config' commands to ios_config 
-    and 'exec' commands to ios_command, allowing safe saves and show commands.
+    Executes Ansible, streams output to the UI, and logs the entire transaction to the DB.
     """
-    
-    # Optional Safety Normalizer: If Claude accidentally outputs the old format (a flat list), 
-    # automatically convert it into the new format so Ansible doesn't crash.
     for host, data in ai_config_data.items():
         if isinstance(data, list):
             ai_config_data[host] = {"config": data, "exec": []}
@@ -23,7 +20,6 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         with open(vars_path, 'w') as f:
             json.dump({"ai_config": ai_config_data}, f)
 
-        # --- BUILD DYNAMIC INVENTORY ---
         inventory_data = {"all": {"hosts": {}}}
         for dev in devices:
             ansible_os = "cisco.ios.ios"
@@ -47,7 +43,6 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
                 for k, v in vars_dict.items():
                     f.write(f"      {k}: {v}\n")
 
-        # --- BUILD DUAL-MODULE PLAYBOOK ---
         playbook_content = """
 - name: VNMS JSON Data Model Deployment
   hosts: all
@@ -71,6 +66,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         - inventory_hostname in ai_config 
         - ai_config[inventory_hostname]['exec'] is defined
         - ai_config[inventory_hostname]['exec'] | length > 0
+        - not ansible_check_mode
       register: exec_result
 
     - name: PRINT RESULTS
@@ -78,7 +74,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         msg:
           config_changed: "{{ config_result.changed | default(false) }}"
           config_updates: "{{ config_result.updates | default([]) }}"
-          exec_output: "{{ exec_result.stdout_lines | default([]) }}"
+          exec_output: "{{ exec_result.stdout_lines | default(['Skipped in Simulation Mode']) }}"
 """
         with open(playbook_path, 'w') as f:
             f.write(playbook_content)
@@ -94,7 +90,6 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         env["ANSIBLE_FORCE_COLOR"] = "0" 
 
         cmd = ["ansible-playbook", "-i", inventory_path, playbook_path, "--diff"]
-        
         if is_check_mode:
             cmd.append("--check")
 
@@ -103,15 +98,36 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
             text=True, bufsize=1, universal_newlines=True, env=env
         )
 
+        # --- NEW: Capture Output for Logging ---
+        ansible_full_log = ""
         for line in process.stdout:
             clean_line = line.rstrip('\r\n')
+            ansible_full_log += clean_line + "\n"
             yield f"data: {clean_line}\n\n"
 
         process.stdout.close()
         process.wait()
 
+        # --- NEW: Inject the Audit Log ---
+        severity = "SUCCESS" if process.returncode == 0 else "ERROR"
+        action = "Configuration Simulation" if is_check_mode else "Live Configuration Push"
+        
+        log_event(
+            db=db,
+            event_type="Configuration",
+            severity=severity,
+            author=author,
+            target_devices=[d.hostname for d in devices],
+            details={
+                "action": action,
+                "prompt": prompt,
+                "ai_model": ai_config_data,
+                "ansible_logs": ansible_full_log
+            }
+        )
+
         yield "data: --------------------------------------------------\n\n"
         if process.returncode == 0:
-            yield "data: PLAYBOOK COMPLETE: No syntax errors detected.\n\n"
+            yield "data: PLAYBOOK COMPLETE: No errors detected.\n\n"
         else:
-            yield "data: PLAYBOOK FINISHED WITH ERRORS. Review the logs above.\n\n"
+            yield "data: PLAYBOOK FINISHED WITH ERRORS.\n\n"

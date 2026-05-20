@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 # --- DEVICE CRUD SCHEMAS ---
 # This is the shape of the data we EXPECT the user to send us
@@ -55,6 +56,23 @@ class AIConfigGenerate(BaseModel):
     routers: list[str]
 
 class SimulateConfigRequest(BaseModel):
+    prompt: Optional[str] = "Manual Edit / No Prompt"
     config_text: str
     switches: list[str]
     routers: list[str]
+
+# --- EVENT LOG SCHEMAS ---
+
+class EventLogCreate(BaseModel):
+    event_type: str
+    severity: str
+    author: Optional[str] = "System"
+    target_devices: list[str] = []
+    details: dict = {}
+
+class EventLogResponse(EventLogCreate):
+    id: int
+    timestamp: datetime
+
+    class config:
+        from_attributes = True

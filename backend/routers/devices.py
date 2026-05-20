@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models, schemas
 import subprocess
+from logger import log_event
 
 # We define the router here. 
 router = APIRouter(tags=["Inventory & Devices"])
@@ -21,6 +22,14 @@ def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db)):
     db.add(db_device)
     db.commit()
     db.refresh(db_device)
+    
+    # --- LOG CREATION ---
+    log_event(
+        db=db, event_type="Inventory", severity="SUCCESS", 
+        target_devices=[db_device.hostname], 
+        details={"action": "Created new device", "ip_address": db_device.ip_address}
+    )
+    
     return db_device
 
 @router.put("/device/{device_id}", response_model=schemas.DeviceResponse)
@@ -39,12 +48,27 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
         if existing_ip:
             raise HTTPException(status_code=400, detail=f"Error: IP Address '{device_update.ip_address}' is already in use.")
     
+    # --- CALCULATE EXACT CHANGES FOR THE AUDIT LOG ---
     update_data = device_update.model_dump(exclude_unset=True)
+    changes = {}
+    
     for key, value in update_data.items():
+        old_value = getattr(db_device, key)
+        if old_value != value:
+            changes[key] = {"old": old_value, "new": value}
         setattr(db_device, key, value)
 
     db.commit()
     db.refresh(db_device)
+    
+    # --- LOG UPDATE IF CHANGES WERE MADE ---
+    if changes:
+        log_event(
+            db=db, event_type="Inventory", severity="INFO", 
+            target_devices=[db_device.hostname], 
+            details={"action": "Updated device parameters", "changes": changes}
+        )
+        
     return db_device
 
 @router.delete("/device/{device_id}")
@@ -52,10 +76,20 @@ def delete_device(device_id: int, db: Session = Depends(get_db)):
     db_device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
     if not db_device:
         raise HTTPException(status_code=404, detail="Device not found")
+    
+    hostname = db_device.hostname  # Save before deleting!
+    
     db.delete(db_device)
     db.commit()
+    
+    # --- LOG DELETION ---
+    log_event(
+        db=db, event_type="Inventory", severity="WARNING", 
+        target_devices=[hostname], 
+        details={"action": "Deleted device from inventory"}
+    )
+    
     return {"message": "Device deleted"}
-
 
 # 5. Network Mapper (GET)
 @router.get("/network-map/")
