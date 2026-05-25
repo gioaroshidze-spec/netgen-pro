@@ -1,17 +1,29 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import models
 from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+import models
 from database import engine, SessionLocal
+from contextlib import asynccontextmanager
 
-# Import our new segregated routers
-from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth
+# Import our routers and scheduler
+from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs
+from scheduler_engine import start_scheduler, scheduler # <-- NEW
 
 # Initialize Database Engine
 models.Base.metadata.create_all(bind=engine)
 
+# --- NEW: LIFESPAN MANAGER (Starts and stops background processes) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Initializing VNMS Background Scheduler...")
+    start_scheduler()
+    yield
+    print("Shutting down VNMS Background Scheduler...")
+    scheduler.shutdown()
+
 # Initialize FastAPI App
-app = FastAPI(title="VNMS Central API", version="1.0")
+app = FastAPI(title="VNMS Central API", version="1.0", lifespan=lifespan)
 
 # Setup CORS for the React Frontend
 app.add_middleware(
@@ -35,6 +47,7 @@ if not admin_exists:
 db.close()
 
 # --- REGISTER ALL ROUTERS ---
+app.include_router(jobs.router)
 app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(maintenance.router)

@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 # --- DEVICE CRUD SCHEMAS ---
@@ -88,6 +88,31 @@ class TemplateResponse(TemplateCreate):
     id: int
     description: str
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# --- SCHEDULED JOBS SCHEMAS ---
+class ScheduledJobBase(BaseModel):
+    name: str
+    job_type: str  # 'backup' or 'template_push'
+    target_devices: List[str]
+    job_payload: Dict[str, Any]
+    cron_day_of_week: Optional[str] = None
+    cron_hour: Optional[str] = None
+    cron_minute: Optional[str] = None
+    interval_hours: Optional[int] = None
+
+class ScheduledJobCreate(ScheduledJobBase):
+    pass
+
+class ScheduledJobResponse(ScheduledJobBase):
+    id: int
+    is_active: bool
+    created_by: str
+    created_at: datetime
+    last_run_status: str
+    last_run_time: Optional[datetime] = None
 
     class Config:
         from_attributes = True
