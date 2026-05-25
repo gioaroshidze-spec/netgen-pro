@@ -6,12 +6,22 @@ import Configuration from './components/Configuration'
 import EventLogs from './components/EventLogs'
 import Templates from './components/Templates'
 import CLI from './components/CLI'
+import Login from './components/Login'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
 
 function App() {
   // --- STATE MANAGEMENT ---
+
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    setIsAuthenticated(false)
+  }
+
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem('vnmsActiveTab') || 'Configuration'
   })
@@ -78,27 +88,50 @@ function App() {
     setList(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname])
   }
 
+  // --- GATEKEEPER: IF NOT LOGGED IN, ONLY SHOW LOGIN SCREEN ---
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#1e1e1e', color: '#fff' }}>
       
       {/* ================= TOP NAVIGATION TABS ================= */}
-      <div style={{ display: 'flex', backgroundColor: '#252526', borderBottom: '1px solid #333', padding: '0 20px', alignItems: 'center' }}>
-        <h2 
-          onClick={() => setActiveTab('Configuration')} 
-          style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}
-        >
-          VNMS
-        </h2>
-        <div style={{ display: 'flex', gap: '2px' }}>
-          {TABS.map(tab => (
-            <button 
-              key={tab} onClick={() => setActiveTab(tab)}
-              style={{ padding: '15px 25px', backgroundColor: activeTab === tab ? '#1e1e1e' : 'transparent', color: activeTab === tab ? '#fff' : '#aaa', border: 'none', borderTop: activeTab === tab ? '3px solid #007acc' : '3px solid transparent', cursor: 'pointer', fontWeight: activeTab === tab ? 'bold' : 'normal', fontSize: '1rem' }}
-            >
-              {tab}
-            </button>
-          ))}
+      <div style={{ display: 'flex', backgroundColor: '#252526', borderBottom: '1px solid #333', padding: '0 20px', alignItems: 'center', justifyContent: 'space-between' }}>
+        
+        {/* Left Side: Logo and Tabs */}
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <h2 
+            onClick={() => setActiveTab('Configuration')} 
+            style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}
+          >
+            VNMS
+          </h2>
+          <div style={{ display: 'flex', gap: '2px' }}>
+            {TABS.map(tab => (
+              <button 
+                key={tab} onClick={() => setActiveTab(tab)}
+                style={{ padding: '15px 25px', backgroundColor: activeTab === tab ? '#1e1e1e' : 'transparent', color: activeTab === tab ? '#fff' : '#aaa', border: 'none', borderTop: activeTab === tab ? '3px solid #007acc' : '3px solid transparent', cursor: 'pointer', fontWeight: activeTab === tab ? 'bold' : 'normal', fontSize: '1rem' }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Right Side: User Info & Logout */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <span style={{ fontSize: '0.9rem', color: '#aaa' }}>
+            Logged in as: <strong style={{ color: '#fff' }}>{localStorage.getItem('username')}</strong>
+          </span>
+          <button 
+            onClick={handleLogout}
+            style={{ padding: '6px 12px', backgroundColor: 'transparent', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            Logout
+          </button>
+        </div>
+
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>

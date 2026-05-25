@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import models
-from database import engine
+from passlib.context import CryptContext
+from database import engine, SessionLocal
 
 # Import our new segregated routers
-from routers import devices, maintenance, compare, configuration, logs, templates, cli
+from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth
 
 # Initialize Database Engine
 models.Base.metadata.create_all(bind=engine)
@@ -21,7 +22,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- NEW: CREATE DEFAULT ADMIN USER ON STARTUP ---
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+db = SessionLocal()
+admin_exists = db.query(models.User).filter(models.User.username == "admin").first()
+if not admin_exists:
+    print("Creating default admin user...")
+    hashed_pw = pwd_context.hash("admin") # Default password is 'admin'
+    default_admin = models.User(username="admin", hashed_password=hashed_pw, role="admin")
+    db.add(default_admin)
+    db.commit()
+db.close()
+
 # --- REGISTER ALL ROUTERS ---
+app.include_router(auth.router)
 app.include_router(devices.router)
 app.include_router(maintenance.router)
 app.include_router(compare.router)

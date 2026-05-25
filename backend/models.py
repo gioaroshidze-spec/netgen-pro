@@ -38,3 +38,14 @@ class ConfiguraitonTemplate(Base):
     description = Column(String)
     payload = Column(JSON)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# --- USER / AUTHENTICATION
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    role = Column(String, default="admin")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
