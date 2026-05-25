@@ -7,36 +7,33 @@ import EventLogs from './components/EventLogs'
 import Templates from './components/Templates'
 import CLI from './components/CLI'
 import Login from './components/Login'
+import Users from './components/Users'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
 
 function App() {
-  // --- STATE MANAGEMENT ---
-
+  // --- AUTHENTICATION & ROLE STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
+  const userRole = localStorage.getItem('role') || 'viewer'
 
-  const handleLogout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('username')
-    setIsAuthenticated(false)
-  }
-
+  // --- STANDARD APP STATE ---
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem('vnmsActiveTab') || 'Configuration'
   })
 
   useEffect(() => {
-    localStorage.setItem('vnmsActiveTab', activeTab)
-  }, [activeTab])
+    if (isAuthenticated) {
+      localStorage.setItem('vnmsActiveTab', activeTab)
+    }
+  }, [activeTab, isAuthenticated])
   
   const [loadedTemplate, setLoadedTemplate] = useState(null)
-
   const [devices, setDevices] = useState([])
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState({})
   
-  // Configuration Target States (Used by Sidebar and passed to Configuration tab)
+  // Configuration Target States
   const [selectedSwitches, setSelectedSwitches] = useState([])
   const [selectedRouters, setSelectedRouters] = useState([])
   
@@ -44,30 +41,52 @@ function App() {
   const [connectionSearch, setConnectionSearch] = useState('')
   const [dropdownSearch, setDropdownSearch] = useState('')
 
+  // --- DYNAMIC TABS BASED ON ROLE ---
   const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
+  if (userRole === 'admin') {
+    TABS.push('Users')
+  }
 
-  // --- DATA FETCHING ---
+  // --- LOGOUT ROUTINE ---
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    localStorage.removeItem('role')
+    setIsAuthenticated(false)
+  }
+
+// --- DATA FETCHING ---
   const fetchNetworkStatus = () => {
     setIsRefreshing(true)
-    fetch(MAP_URL)
-      .then(res => res.json())
+    fetch(MAP_URL, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- INJECT TOKEN
+    })
+      .then(res => {
+        if (!res.ok) throw new Error("Unauthorized");
+        return res.json();
+      })
       .then(data => { setDevices(data); setIsRefreshing(false) })
       .catch(err => { console.error(err); setIsRefreshing(false) })
   }
 
   useEffect(() => {
+    // Prevent fetching if we aren't logged in yet!
+    if (!isAuthenticated) return;
+
     fetchNetworkStatus()
     
     // Fetch archive files on load
-    fetch('http://127.0.0.1:8000/archive/files')
+    fetch('http://127.0.0.1:8000/archive/files', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- INJECT TOKEN
+    })
       .then(res => res.json())
       .then(data => setArchiveFiles(data))
       .catch(err => console.error("Failed to load archive:", err))
 
     const intervalId = setInterval(fetchNetworkStatus, 30000)
     return () => clearInterval(intervalId)
-  }, [])
-
+  }, [isAuthenticated])
+  
   // --- SORTING & FILTERING LOGIC FOR SIDEBAR ---
   const sortConnections = (a, b) => {
     if (a.status === 'online' && b.status !== 'online') return -1;
@@ -122,7 +141,10 @@ function App() {
         {/* Right Side: User Info & Logout */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <span style={{ fontSize: '0.9rem', color: '#aaa' }}>
-            Logged in as: <strong style={{ color: '#fff' }}>{localStorage.getItem('username')}</strong>
+            Logged in as: <strong style={{ color: '#fff', textTransform: 'capitalize' }}>{localStorage.getItem('username')}</strong> 
+            <span style={{ marginLeft: '8px', padding: '2px 6px', backgroundColor: userRole === 'admin' ? '#4caf5022' : '#007acc22', color: userRole === 'admin' ? '#4caf50' : '#007acc', borderRadius: '4px', fontSize: '0.75rem', textTransform: 'uppercase' }}>
+              {userRole}
+            </span>
           </span>
           <button 
             onClick={handleLogout}
@@ -131,7 +153,6 @@ function App() {
             Logout
           </button>
         </div>
-
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -198,7 +219,7 @@ function App() {
         <div style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
           
           {/* TAB: MAINTENANCE */}
-          {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} />}
+          {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} userRole={userRole} />}
 
           {/* TAB: COMPARE */}
           {activeTab === 'Compare' && <Compare archiveFiles={archiveFiles} />}
@@ -207,18 +228,20 @@ function App() {
           {activeTab === 'Templates' && <Templates setActiveTab={setActiveTab} setLoadedTemplate={setLoadedTemplate} />}
 
           {/* TAB: CONFIGURATION */}
-          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} loadedTemplate={loadedTemplate} setLoadedTemplate={setLoadedTemplate} />}
+          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} loadedTemplate={loadedTemplate} setLoadedTemplate={setLoadedTemplate} userRole={userRole} />}
           
           {/* TAB: CLI */}
           {activeTab === 'CLI' && <CLI devices={devices} />}
 
           {/* TAB: INVENTORY */}
-          {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} />}
+          {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} userRole={userRole} />}
 
           {/* TAB: EVENT LOGS */}
           {activeTab === 'Event Logs' && <EventLogs />}
 
-          
+          {/* TAB: USERS */}
+          {activeTab === 'Users' && <Users />}
+
         </div>
       </div>
     </div>

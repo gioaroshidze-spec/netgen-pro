@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 const API_URL = 'http://127.0.0.1:8000/device/';
 
-export default function Maintenance({ devices, archiveFiles }) {
+export default function Maintenance({ devices, archiveFiles, userRole }) {
   // Global Backup Destinations
   const [backupDestNVRAM, setBackupDestNVRAM] = useState(false);
   const [backupDestFlash, setBackupDestFlash] = useState(false);
@@ -230,7 +230,12 @@ export default function Maintenance({ devices, archiveFiles }) {
 
             <input type="text" placeholder="Prefix (e.g., Pre-Maintenance)" value={maintBackupName} onChange={e => setMaintBackupName(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px', marginBottom: '15px' }} disabled={!backupDestLocal && !backupDestArchive} />
             
-            <button onClick={handleSingleBackup} disabled={isBackingUp} style={{ width: '100%', padding: '10px', backgroundColor: isBackingUp ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: isBackingUp ? 'wait' : 'pointer', fontWeight: 'bold' }}>
+            <button 
+              onClick={handleSingleBackup} 
+              disabled={isBackingUp || userRole !== 'admin'} 
+              title={userRole !== 'admin' ? "Administrator access required" : ""}
+              style={{ width: '100%', padding: '10px', backgroundColor: (isBackingUp || userRole !== 'admin') ? '#555' : '#007acc', color: (userRole !== 'admin') ? '#aaa' : 'white', border: 'none', borderRadius: '4px', cursor: (isBackingUp || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+            >
               {isBackingUp ? 'Executing Backup...' : 'Run Single Backup'}
             </button>
           </div>
@@ -279,9 +284,16 @@ export default function Maintenance({ devices, archiveFiles }) {
                 )}
               </div>
             </div>
-            <button onClick={handleBulkBackup} disabled={isBulkBackingUp} style={{ width: '100%', padding: '10px', backgroundColor: isBulkBackingUp ? '#555' : '#007acc', color: '#fff', border: '1px solid #555', borderRadius: '4px', cursor: isBulkBackingUp ? 'wait' : 'pointer', fontWeight: 'bold' }}>
+            
+            <button 
+              onClick={handleBulkBackup} 
+              disabled={isBulkBackingUp || userRole !== 'admin'} 
+              title={userRole !== 'admin' ? "Administrator access required" : ""}
+              style={{ width: '100%', padding: '10px', backgroundColor: (isBulkBackingUp || userRole !== 'admin') ? '#555' : '#007acc', color: (userRole !== 'admin') ? '#aaa' : '#fff', border: '1px solid #555', borderRadius: '4px', cursor: (isBulkBackingUp || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+            >
               {isBulkBackingUp ? 'Executing Bulk Backup...' : 'Run Bulk Backup'}
             </button>
+
           </div>
         </div>
 
@@ -373,9 +385,16 @@ export default function Maintenance({ devices, archiveFiles }) {
             <span style={{ color: '#f44336', fontWeight: 'bold', fontSize: '0.9rem' }}>⚠️ Warning:</span>
             <span style={{ color: '#aaa', fontSize: '0.85rem', marginLeft: '5px' }}>Restoring a configuration will overwrite the current running-config on the selected targets.</span>
           </div>
-          <button onClick={handleRestore} disabled={isRestoring} style={{ width: '100%', padding: '12px', backgroundColor: isRestoring ? '#555' : '#e6a23c', color: isRestoring ? '#ccc' : 'black', border: 'none', borderRadius: '4px', cursor: isRestoring ? 'wait' : 'pointer', fontWeight: 'bold', fontSize: '1rem' }}>
+          
+          <button 
+            onClick={handleRestore} 
+            disabled={isRestoring || userRole !== 'admin'} 
+            title={userRole !== 'admin' ? "Administrator access required" : ""}
+            style={{ width: '100%', padding: '12px', backgroundColor: (isRestoring || userRole !== 'admin') ? '#555' : '#e6a23c', color: (isRestoring || userRole !== 'admin') ? '#aaa' : 'black', border: 'none', borderRadius: '4px', cursor: (isRestoring || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '1rem' }}
+          >
             {isRestoring ? 'Pushing Configurations...' : 'Execute Restore'}
           </button>
+
         </div>
         
       </div>

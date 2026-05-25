@@ -62,11 +62,23 @@ function TerminalWindow({ device, isActive, onClose }) {
     });
 
     return () => {
-      isMounted = false;
-      if (ws.current) ws.current.close();
-      if (termInstance.current) termInstance.current.dispose();
-    };
-  }, [device.id, device.hostname]);
+          isMounted = false;
+          try {
+            if (ws.current) {
+              ws.current.onmessage = null; // Stop listening to incoming messages
+              ws.current.onclose = null;   // Prevent triggering state updates
+              if (ws.current.readyState === WebSocket.OPEN) {
+                ws.current.close();
+              }
+            }
+            if (termInstance.current) {
+              termInstance.current.dispose();
+            }
+          } catch (err) {
+            console.warn("Terminal cleanup sequence aborted:", err);
+          }
+        };
+      }, [device.id, device.hostname]);
 
   // --- NEW: React to Window Resizing and Tab Switching ---
   useEffect(() => {
@@ -112,7 +124,7 @@ export default function CLI({ devices }) {
   };
 
   const closeTerminal = (e, deviceId) => {
-    e.stopPropagation(); 
+    if (e && e.stopPropagation) e.stopPropagation(); 
     const newSessions = openSessions.filter(s => s.id !== deviceId);
     setOpenSessions(newSessions);
     if (activeTabId === deviceId) {

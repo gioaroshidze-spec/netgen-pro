@@ -32,6 +32,7 @@ export default function Login({ onLoginSuccess }) {
         // Save the JWT token to local storage so it persists on refresh
         localStorage.setItem('token', data.access_token);
         localStorage.setItem('username', username);
+        localStorage.setItem('role', data.role);
         onLoginSuccess(); // Unlock the dashboard
       })
       .catch((err) => {
@@ -45,7 +46,7 @@ export default function Login({ onLoginSuccess }) {
       <div style={{ backgroundColor: '#252526', padding: '40px', borderRadius: '8px', border: '1px solid #333', width: '100%', maxWidth: '400px', boxShadow: '0 4px 15px rgba(0,0,0,0.5)' }}>
         
         <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <h1 style={{ margin: '0 0 10px 0', color: '#007acc' }}>VNMS</h1>
+          <h1 style={{ margin: '0 0 10px 0', color: '#007acc' }}></h1>
           <div style={{ color: '#aaa', fontSize: '0.9rem' }}>Enterprise Orchestration Engine</div>
         </div>
 

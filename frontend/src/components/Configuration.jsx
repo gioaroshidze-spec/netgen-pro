@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-export default function Configuration({ selectedSwitches, selectedRouters, loadedTemplate, setLoadedTemplate }) {
+export default function Configuration({ selectedSwitches, selectedRouters, loadedTemplate, setLoadedTemplate, userRole }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
   const [generatedAiConfig, setGeneratedAiConfig] = useState('');
@@ -265,10 +265,13 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           >
             {isSimulating ? 'Simulating...' : '🧪 Simulate Changes (--check)'}
           </button>
+          
+          {/* SECURED PRODUCTION PUSH BUTTON */}
           <button 
             onClick={() => executeConfig('push')} 
-            disabled={isBusy} 
-            style={{ padding: '10px 20px', backgroundColor: isBusy ? '#555' : '#d32f2f', color: isBusy ? '#aaa' : 'white', border: 'none', borderRadius: '4px', cursor: isBusy ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+            disabled={isBusy || userRole !== 'admin'} 
+            title={userRole !== 'admin' ? "Administrator access required to push to production" : ""}
+            style={{ padding: '10px 20px', backgroundColor: (isBusy || userRole !== 'admin') ? '#555' : '#d32f2f', color: (isBusy || userRole !== 'admin') ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
           >
             {isPushing ? 'Deploying...' : '🚀 Push to Production'}
           </button>
