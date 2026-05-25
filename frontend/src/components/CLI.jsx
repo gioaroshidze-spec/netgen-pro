@@ -46,8 +46,9 @@ function TerminalWindow({ device, isActive, onClose }) {
         fitAddon.fit();
         term.writeln(`\x1b[36m--- Establishing Secure Connection to ${device.hostname} ---\x1b[0m`);
 
-        // 3. Open the WebSocket
-        const socket = new WebSocket(`ws://127.0.0.1:8000/ws/cli/${device.id}`);
+      // 3. Open the WebSocket to our FastAPI Backend
+        const token = localStorage.getItem('token');
+        const socket = new WebSocket(`ws://127.0.0.1:8000/ws/cli/${device.id}?token=${token}`); // <-- INJECT TOKEN HERE
         ws.current = socket;
 
         // 4. Bridge Data

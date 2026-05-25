@@ -37,6 +37,9 @@ export default function Compare({ archiveFiles }) {
 
     fetch('http://127.0.0.1:8000/compare/', {
       method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // <-- TOKEN INJECTED
+      },
       body: formData
     })
     .then(async res => {

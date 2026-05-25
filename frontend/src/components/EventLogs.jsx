@@ -26,7 +26,11 @@ export default function EventLogs() {
     if (filterEndDate) params.append('end_date', new Date(filterEndDate).toISOString());
     params.append('limit', filterLimit);
 
-    fetch(`http://127.0.0.1:8000/logs/?${params.toString()}`)
+    fetch(`http://127.0.0.1:8000/logs/?${params.toString()}`, {
+      headers: { 
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // <-- TOKEN INJECTED
+      }
+    })
       .then(async res => {
         if (!res.ok) throw new Error("Failed to fetch logs");
         return res.json();
@@ -121,7 +125,6 @@ export default function EventLogs() {
         </div>
       </div>
 
-      {/* CHANGED: overflowX: 'auto' so the table can scroll horizontally if needed! */}
       <div style={{ backgroundColor: '#252526', borderRadius: '8px', border: '1px solid #333', overflowX: 'auto' }}>
         <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse', minWidth: '900px' }}>
           <thead style={{ backgroundColor: '#333' }}>
@@ -164,7 +167,6 @@ export default function EventLogs() {
 
               return (
               <React.Fragment key={log.id}>
-                {/* MAIN ROW */}
                 <tr style={{ borderBottom: '1px solid #444', backgroundColor: expandedRow === log.id ? '#2a2a2a' : 'transparent', transition: 'background-color 0.2s' }}>
                   <td style={{ padding: '15px', color: '#aaa', fontSize: '0.9rem' }}>{new Date(log.timestamp).toLocaleString()}</td>
                   <td style={{ padding: '15px', fontWeight: 'bold' }}>{log.event_type}</td>
@@ -182,7 +184,6 @@ export default function EventLogs() {
                   </td>
                 </tr>
 
-                {/* EXPANDED RICH JSON DATA ROW */}
                 {expandedRow === log.id && (
                   <tr style={{ backgroundColor: '#1a1a1a', borderBottom: '2px solid #007acc' }}>
                     <td colSpan="6" style={{ padding: '20px' }}>
@@ -203,7 +204,6 @@ export default function EventLogs() {
                       <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
                         <div style={{ flex: 1, minWidth: '300px', maxWidth: '100%' }}>
                           <strong style={{ color: '#aaa', display: 'block', marginBottom: '5px' }}>Raw Payload Data:</strong>
-                          {/* CHANGED: Added whiteSpace: 'pre-wrap' and wordBreak: 'break-word' */}
                           <pre style={{ backgroundColor: '#000', padding: '15px', borderRadius: '4px', border: '1px solid #333', color: '#569cd6', overflowX: 'auto', maxHeight: '400px', fontSize: '0.85rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                             {JSON.stringify(rawPayloadData, null, 2)}
                           </pre>
@@ -212,7 +212,6 @@ export default function EventLogs() {
                         {safeDetails.ansible_logs && (
                           <div style={{ flex: 1.5, minWidth: '300px', maxWidth: '100%' }}>
                             <strong style={{ color: '#aaa', display: 'block', marginBottom: '5px' }}>Execution Output (Ansible stdout):</strong>
-                            {/* CHANGED: Added whiteSpace: 'pre-wrap' and wordBreak: 'break-word' */}
                             <pre style={{ backgroundColor: '#000', padding: '15px', borderRadius: '4px', border: '1px solid #333', color: '#00ff00', overflowX: 'auto', maxHeight: '400px', fontSize: '0.85rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                               {safeDetails.ansible_logs}
                             </pre>

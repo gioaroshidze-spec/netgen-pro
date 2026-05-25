@@ -9,7 +9,9 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
 
   const fetchTemplates = () => {
     setIsLoading(true);
-    fetch(API_URL)
+    fetch(API_URL, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- TOKEN INJECTED
+    })
       .then(res => {
         if (!res.ok) throw new Error("Failed to fetch templates");
         return res.json();
@@ -30,12 +32,14 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
 
   const handleDelete = (id) => {
     if (!window.confirm("Are you sure you want to delete this template?")) return;
-    fetch(`${API_URL}${id}`, { method: 'DELETE' })
+    fetch(`${API_URL}${id}`, { 
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- TOKEN INJECTED
+    })
       .then(() => fetchTemplates())
       .catch(err => console.error("Failed to delete", err));
   };
 
-  // Teleport the user to the Configuration tab with the payload loaded!
   const handleLoad = (template) => {
     setLoadedTemplate(template);
     setActiveTab('Configuration');
@@ -80,7 +84,6 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
               <tr><td colSpan="5" style={{ padding: '30px', textAlign: 'center', color: '#666' }}>No templates saved yet.</td></tr>
             ) : templates.map((tmpl) => (
               <React.Fragment key={tmpl.id}>
-                {/* MAIN ROW */}
                 <tr style={{ borderBottom: '1px solid #444', backgroundColor: expandedRow === tmpl.id ? '#2a2a2a' : 'transparent', transition: 'background-color 0.2s' }}>
                   <td style={{ padding: '15px', fontWeight: 'bold' }}>{tmpl.name}</td>
                   <td style={{ padding: '15px' }}>
@@ -103,7 +106,6 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
                   </td>
                 </tr>
 
-                {/* EXPANDED ROW FOR JSON */}
                 {expandedRow === tmpl.id && (
                   <tr style={{ backgroundColor: '#1a1a1a', borderBottom: '2px solid #007acc' }}>
                     <td colSpan="5" style={{ padding: '20px' }}>

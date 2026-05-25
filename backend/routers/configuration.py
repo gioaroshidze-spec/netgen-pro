@@ -6,31 +6,24 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
-import models
-import schemas
+import models, schemas
 from litellm import completion
 from netmiko import ConnectHandler
 
-# IMPORT OUR NEW ENGINE
+# --- IMPORT THE BOUNCERS ---
+from routers.auth import get_current_user
 from ansible_engine import run_ansible_playbook
 
 router = APIRouter(tags=["Configuration Engine"])
 
 @router.post("/configuration/generate")
-def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depends(get_db)):
-    """
-    Receives an AI prompt and target lists, then generates the configuration logic
-    as a strict JSON Data Model using the active LLM via LiteLLM.
-    Uses Netmiko to pull LIVE running-config context before prompting the AI.
-    """
+def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
     
-    # 1. Format the targets so that AI knows what devices it is configuring
     switches_str = ", ".join(request.switches) if request.switches else "None"
     routers_str = ", ".join(request.routers) if request.routers else "None"
 
-    # 2. Define the System Prompt
     system_prompt = (
         "You are an expert Enterprise Network Automation API. "
         "Your job is to read the network requirement and the provided running configs, and output the desired state. "
@@ -50,50 +43,32 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         '}'
     )
 
-    # 3. Define the User Prompt
-    user_prompt = f"""
-    Target Switches: {switches_str}
-    Target Routers: {routers_str}
-    
-    Network Requirement: {request.prompt}
-    """
+    user_prompt = f"Target Switches: {switches_str}\nTarget Routers: {routers_str}\n\nNetwork Requirement: {request.prompt}"
 
     if request.base_template:
         user_prompt += f"\n\n--- BASE TEMPLATE PROVIDED ---\nAdapt the following configuration structure for the new targets and requirements:\n{json.dumps(request.base_template, indent=2)}"
 
-    # --- NEW: LIVE RETRIEVAL-AUGMENTED GENERATION (RAG) ---
     device_context = ""
     target_hostnames = request.switches + request.routers
     
     if target_hostnames:
-        # Fetch device IPs and credentials from the database
         devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
-        
         for dev in devices:
             try:
-                # Map OS to Netmiko device types
                 netmiko_os = 'cisco_ios'
-                if dev.os_type == 'aruba' or dev.os_type == 'hpe':
-                    netmiko_os = 'hp_procurve' # General fallback for standard switches, adjust if using aoscx
+                if dev.os_type == 'aruba' or dev.os_type == 'hpe': netmiko_os = 'hp_procurve'
                 
                 connection_params = {
-                    'device_type': netmiko_os,
-                    'host': dev.ip_address,
-                    'username': dev.username,
-                    'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
-                    'fast_cli': True # Speeds up execution
+                    'device_type': netmiko_os, 'host': dev.ip_address,
+                    'username': dev.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                    'fast_cli': True
                 }
-                
                 with ConnectHandler(**connection_params) as net_connect:
                     net_connect.enable()
                     raw_config = net_connect.send_command("show running-config")
-                    
-                    # Clean out the timestamp headers to save AI tokens
                     clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                     config_content = "\n".join(clean_lines)
-                    
                     device_context += f"\n! --- LIVE RUNNING CONFIGURATION FOR {dev.hostname} ---\n{config_content}\n"
-                    print(f"Successfully pulled live config for {dev.hostname} context.")
                     
             except Exception as e:
                 print(f"Failed to fetch live config for {dev.hostname}: {e}")
@@ -106,65 +81,46 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         model_name = os.getenv("ACTIVE_AI_MODEL", "claude-opus-4-7") 
         response = completion(
             model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         )
         
-        # 4. Extract and clean the JSON response
         raw_response = response.choices[0].message.content
         clean_text = raw_response.replace("```json", "").replace("```", "").strip()
         
-        # 5. Validate and Pretty-Print the JSON
         try:
             parsed_json = json.loads(clean_text)
             beautiful_json = json.dumps(parsed_json, indent=2) 
             return {"status": "success", "config": beautiful_json}
-            
         except json.JSONDecodeError:
-            print(f"Failed to parse AI output as JSON: {clean_text}")
             raise HTTPException(status_code=500, detail="AI generated invalid JSON format. Please try generating again.")
     
     except Exception as e:
-        print(f"LiteLLM Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI Engine Error: Check console for details. {str(e)}")
 
-
 @router.post("/configuration/simulate")
-def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db)):
-    """Runs the configuration through Ansible in strict --check mode."""
+def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
-    
-    try:
-        ai_config_data = json.loads(request.config_text)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Configuration is not valid JSON. Please generate logic or format as JSON.")
+    try: ai_config_data = json.loads(request.config_text)
+    except json.JSONDecodeError: raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
+    if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-    if not devices:
-        raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
-
-    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=True), media_type="text/event-stream")
+    # Pass current_user.username as the author!
+    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=True, author=current_user.username), media_type="text/event-stream")
 
 @router.post("/configuration/push")
-def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db)):
-    """Pushes the configuration live to the hardware."""
+def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
-    
-    try:
-        ai_config_data = json.loads(request.config_text)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Configuration is not valid JSON. Please generate logic or format as JSON.")
+    try: ai_config_data = json.loads(request.config_text)
+    except json.JSONDecodeError: raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
+    if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-    if not devices:
-        raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
-
-    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=False), media_type="text/event-stream")
+    # Pass current_user.username as the author!
+    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=False, author=current_user.username), media_type="text/event-stream")

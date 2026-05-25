@@ -171,6 +171,10 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
 
   const isBusy = isSimulating || isPushing || !generatedAiConfig;
 
+  // NEW: RBAC Logic for Execution
+  // Admins can always execute. Viewers can ONLY execute if a template is loaded.
+  const canExecute = userRole === 'admin' || (userRole === 'viewer' && loadedTemplate !== null);
+
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
       
@@ -201,8 +205,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
           <button 
             onClick={handleGenerateConfig} 
-            disabled={isAiGenerating || isPushing || isSimulating} 
-            style={{ padding: '10px 20px', backgroundColor: (isAiGenerating || isPushing || isSimulating) ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: (isAiGenerating || isPushing || isSimulating) ? 'wait' : 'pointer', fontWeight: 'bold' }}
+            disabled={isAiGenerating || isPushing || isSimulating || !canExecute} 
+            title={!canExecute ? "Load a template to enable AI Generation" : ""}
+            style={{ padding: '10px 20px', backgroundColor: (isAiGenerating || isPushing || isSimulating || !canExecute) ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: (isAiGenerating || isPushing || isSimulating || !canExecute) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
           >
             {isAiGenerating ? 'Generating...' : (loadedTemplate ? 'Adapt Template Logic' : 'Generate Logic')}
           </button>
@@ -260,18 +265,18 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '20px', gap: '15px' }}>
           <button 
             onClick={() => executeConfig('simulate')} 
-            disabled={isBusy} 
-            style={{ padding: '10px 20px', backgroundColor: isBusy ? '#555' : '#007acc', color: isBusy ? '#aaa' : 'white', border: 'none', borderRadius: '4px', cursor: isBusy ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+            disabled={isBusy || !canExecute} 
+            title={!canExecute ? "Load a template to enable simulation" : ""}
+            style={{ padding: '10px 20px', backgroundColor: (isBusy || !canExecute) ? '#555' : '#007acc', color: (isBusy || !canExecute) ? '#aaa' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || !canExecute) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
           >
             {isSimulating ? 'Simulating...' : '🧪 Simulate Changes (--check)'}
           </button>
           
-          {/* SECURED PRODUCTION PUSH BUTTON */}
           <button 
             onClick={() => executeConfig('push')} 
-            disabled={isBusy || userRole !== 'admin'} 
-            title={userRole !== 'admin' ? "Administrator access required to push to production" : ""}
-            style={{ padding: '10px 20px', backgroundColor: (isBusy || userRole !== 'admin') ? '#555' : '#d32f2f', color: (isBusy || userRole !== 'admin') ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+            disabled={isBusy || !canExecute} 
+            title={!canExecute ? "Load a template to enable production push" : ""}
+            style={{ padding: '10px 20px', backgroundColor: (isBusy || !canExecute) ? '#555' : '#d32f2f', color: (isBusy || !canExecute) ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || !canExecute) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
           >
             {isPushing ? 'Deploying...' : '🚀 Push to Production'}
           </button>

@@ -16,6 +16,7 @@ function App() {
   // --- AUTHENTICATION & ROLE STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
   const userRole = localStorage.getItem('role') || 'viewer'
+  const currentUsername = localStorage.getItem('username') //
 
   // --- STANDARD APP STATE ---
   const [activeTab, setActiveTab] = useState(() => {
@@ -43,10 +44,11 @@ function App() {
 
   // --- DYNAMIC TABS BASED ON ROLE ---
   const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
-  if (userRole === 'admin') {
+  
+  // ONLY the exact 'admin' account gets the user creation tab
+  if (currentUsername === 'admin') {
     TABS.push('Users')
   }
-
   // --- LOGOUT ROUTINE ---
   const handleLogout = () => {
     localStorage.removeItem('token')
@@ -86,7 +88,7 @@ function App() {
     const intervalId = setInterval(fetchNetworkStatus, 30000)
     return () => clearInterval(intervalId)
   }, [isAuthenticated])
-  
+
   // --- SORTING & FILTERING LOGIC FOR SIDEBAR ---
   const sortConnections = (a, b) => {
     if (a.status === 'online' && b.status !== 'online') return -1;

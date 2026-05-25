@@ -6,11 +6,12 @@ import json
 import os
 from litellm import completion
 from logger import log_event
+from routers.auth import get_current_user
 
 router = APIRouter(tags=["Templates"])
 
 @router.post("/templates/", response_model=schemas.TemplateResponse)
-def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_db)):
+def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """
     Saves a configuration JSON as a template and uses AI to auto-generate a description.
     """
@@ -61,12 +62,12 @@ def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_
     return db_template
 
 @router.get("/templates/", response_model=list[schemas.TemplateResponse])
-def get_templates(db: Session = Depends(get_db)):
+def get_templates(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Fetches all saved templates ordered by newest first."""
     return db.query(models.ConfiguraitonTemplate).order_by(models.ConfiguraitonTemplate.created_at.desc()).all()
 
 @router.delete("/templates/{template_id}")
-def delete_template(template_id: int, db: Session = Depends(get_db)):
+def delete_template(template_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     """Deletes a specific template."""
     db_template = db.query(models.ConfiguraitonTemplate).filter(models.ConfiguraitonTemplate.id == template_id).first()
     if not db_template:

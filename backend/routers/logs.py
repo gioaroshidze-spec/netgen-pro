@@ -5,6 +5,8 @@ from database import get_db
 import models, schemas
 from typing import Optional
 from datetime import datetime
+from routers.auth import get_current_user
+
 
 router = APIRouter(tags=["Audit Logs"])
 
@@ -17,8 +19,9 @@ def get_audit_logs(
     device: Optional[str] = None,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    current_user: models.User = Depends(get_current_user),
     limit: int = Query(50, ge=1, le=500), # Default to 50 logs to keep UI fast
-    skip: int = Query(0, ge=0)
+    skip: int = Query(0, ge=0),
 ):
     """
     Fetches the audit logs with highly flexible, optional filtering parameters.

@@ -6,12 +6,13 @@ import models
 import os, difflib
 import re
 from typing import Optional
+from routers.auth import get_current_user
 
 router = APIRouter(tags=["Archive & Compare"])
 ARCHIVE_DIR = "archive"
 
 @router.get("/archive/files")
-def get_archive_files(db: Session = Depends(get_db)):
+def get_archive_files(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not os.path.exists(ARCHIVE_DIR):
         return {}
     
@@ -59,8 +60,9 @@ def get_archive_files(db: Session = Depends(get_db)):
 async def compare_configs(
     upload_file1: Optional[UploadFile] = File(None),
     archive_file1: Optional[str] = Form(None),
+    current_user: models.User = Depends(get_current_user),
     upload_file2: Optional[UploadFile] = File(None),
-    archive_file2: Optional[str] = Form(None)
+    archive_file2: Optional[str] = Form(None),
 ):
     config1 = ""
     config2 = ""

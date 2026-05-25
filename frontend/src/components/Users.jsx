@@ -6,13 +6,13 @@ export default function Users() {
   const [role, setRole] = useState('viewer');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Security Check: If they somehow get here without being an admin, block them visually.
-  const currentUserRole = localStorage.getItem('role');
-  if (currentUserRole !== 'admin') {
+  // Security Check: Only the default Super Admin can manage users
+  const currentUsername = localStorage.getItem('username');
+  if (currentUsername !== 'admin') {
     return (
       <div style={{ padding: '40px', textAlign: 'center', color: '#f44336' }}>
         <h2>Access Denied</h2>
-        <p>You must be an Administrator to view this module.</p>
+        <p>Only the default System Administrator can create new users.</p>
       </div>
     );
   }
@@ -23,7 +23,10 @@ export default function Users() {
 
     fetch('http://127.0.0.1:8000/auth/users', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}` // <-- THE FIX: Injecting the JWT Token!
+      },
       body: JSON.stringify({ username, password, role })
     })
     .then(async res => {
