@@ -8,6 +8,7 @@ import Templates from './components/Templates'
 import CLI from './components/CLI'
 import Login from './components/Login'
 import Users from './components/Users'
+import Dashboard from './components/Dashboard'
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
@@ -20,9 +21,8 @@ function App() {
 
   // --- STANDARD APP STATE ---
   const [activeTab, setActiveTab] = useState(() => {
-    return localStorage.getItem('vnmsActiveTab') || 'Configuration'
+    return localStorage.getItem('vnmsActiveTab') || 'Dashboard' // <-- Default to Dashboard
   })
-
   useEffect(() => {
     if (isAuthenticated) {
       localStorage.setItem('vnmsActiveTab', activeTab)
@@ -43,7 +43,7 @@ function App() {
   const [dropdownSearch, setDropdownSearch] = useState('')
 
   // --- DYNAMIC TABS BASED ON ROLE ---
-  const TABS = ['Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
+  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
   
   // ONLY the exact 'admin' account gets the user creation tab
   if (currentUsername === 'admin') {
@@ -219,6 +219,9 @@ function App() {
 
         {/* ================= MAIN CONTENT AREA ================= */}
         <div style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+
+          {/* TAB: DASHBOARD */}
+          {activeTab === 'Dashboard' && <Dashboard devices={devices} setActiveTab={setActiveTab} userRole={userRole} />}
           
           {/* TAB: MAINTENANCE */}
           {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} userRole={userRole} />}

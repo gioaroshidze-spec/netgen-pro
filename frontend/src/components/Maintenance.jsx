@@ -58,7 +58,10 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
     setIsBackingUp(true);
     fetch(`http://127.0.0.1:8000/backup-device/${targetDevice.id}`, { 
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
       body: JSON.stringify({ 
         save_nvram: backupDestNVRAM,
         save_flash: backupDestFlash,
@@ -101,7 +104,10 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
     
     fetch(`${API_URL.replace('/device/', '/bulk-backup/')}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      },
       body: JSON.stringify({ 
         device_ids: targetIds,
         options: {
@@ -158,6 +164,7 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
 
     fetch(`${API_URL.replace('/device/', '/restore-devices/')}`, {
       method: 'POST',
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       body: formData 
     })
     .then(async res => {
@@ -189,22 +196,33 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', height: '100%' }}>
-      <h2 style={{ marginBottom: '20px' }}>Configuration Maintenance</h2>
       
+      {/* HEADER WITH TOGGLE (Prep for Scheduling UI) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h2 style={{ margin: 0 }}>Configuration Maintenance</h2>
+        <div style={{ display: 'flex', gap: '5px', backgroundColor: '#1e1e1e', padding: '4px', borderRadius: '6px', border: '1px solid #333' }}>
+          <button style={{ padding: '6px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', backgroundColor: '#007acc', color: 'white' }}>Manual Operations</button>
+          <button style={{ padding: '6px 12px', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', backgroundColor: 'transparent', color: '#aaa' }}>Scheduled Jobs (Coming Soon)</button>
+        </div>
+      </div>
+
       <div style={{ display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
-        {/* --- LEFT PANEL: BACKUP --- */}
+        {/* --- LEFT PANEL: BACKUP (Viewers Allowed) --- */}
         <div style={{ flex: 1, backgroundColor: '#252526', padding: '25px', borderRadius: '8px', border: '1px solid #333' }}>
           <h3 style={{ marginTop: 0, color: '#007acc', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Backup Operations</h3>
           
           <div style={{ marginBottom: '20px', backgroundColor: '#1e1e1e', padding: '15px', borderRadius: '4px', border: '1px solid #444' }}>
             <h4 style={{ color: '#fff', margin: '0 0 10px 0', fontSize: '0.9rem' }}>Destination Options</h4>
             <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.85rem' }}>
-                <input type="checkbox" checked={backupDestNVRAM} onChange={(e) => setBackupDestNVRAM(e.target.checked)} style={{ marginRight: '8px' }} /> Save to NVRAM (write mem)
+              
+              {/* VIEWER RBAC: Disable NVRAM & Flash */}
+              <label style={{ display: 'flex', alignItems: 'center', cursor: userRole !== 'admin' ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: userRole !== 'admin' ? '#555' : '#ccc' }} title={userRole !== 'admin' ? "Admin required to write to NVRAM" : ""}>
+                <input type="checkbox" disabled={userRole !== 'admin'} checked={backupDestNVRAM} onChange={(e) => setBackupDestNVRAM(e.target.checked)} style={{ marginRight: '8px' }} /> Save to NVRAM (write mem)
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.85rem' }}>
-                <input type="checkbox" checked={backupDestFlash} onChange={(e) => setBackupDestFlash(e.target.checked)} style={{ marginRight: '8px' }} /> Save to Local Flash
+              <label style={{ display: 'flex', alignItems: 'center', cursor: userRole !== 'admin' ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: userRole !== 'admin' ? '#555' : '#ccc' }} title={userRole !== 'admin' ? "Admin required to write to Flash" : ""}>
+                <input type="checkbox" disabled={userRole !== 'admin'} checked={backupDestFlash} onChange={(e) => setBackupDestFlash(e.target.checked)} style={{ marginRight: '8px' }} /> Save to Local Flash
               </label>
+              
               <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', fontSize: '0.85rem' }}>
                 <input type="checkbox" checked={backupDestLocal} onChange={(e) => setBackupDestLocal(e.target.checked)} style={{ marginRight: '8px' }} /> Download to Computer
               </label>
@@ -216,7 +234,6 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
 
           <div style={{ marginBottom: '30px' }}>
             <h4 style={{ color: '#fff', marginBottom: '10px' }}>1. Single Backup</h4>
-            <p style={{ fontSize: '0.85rem', color: '#aaa', marginTop: 0 }}>Pull and store configuration for a single device.</p>
             
             <select value={maintSingleDevice} onChange={e => setMaintSingleDevice(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px', marginBottom: '10px' }}>
               <option value="" disabled>-- Select a Device --</option>
@@ -230,11 +247,11 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
 
             <input type="text" placeholder="Prefix (e.g., Pre-Maintenance)" value={maintBackupName} onChange={e => setMaintBackupName(e.target.value)} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px', marginBottom: '15px' }} disabled={!backupDestLocal && !backupDestArchive} />
             
+            {/* VIEWER RBAC: Button unlocked for viewers! */}
             <button 
               onClick={handleSingleBackup} 
-              disabled={isBackingUp || userRole !== 'admin'} 
-              title={userRole !== 'admin' ? "Administrator access required" : ""}
-              style={{ width: '100%', padding: '10px', backgroundColor: (isBackingUp || userRole !== 'admin') ? '#555' : '#007acc', color: (userRole !== 'admin') ? '#aaa' : 'white', border: 'none', borderRadius: '4px', cursor: (isBackingUp || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+              disabled={isBackingUp} 
+              style={{ width: '100%', padding: '10px', backgroundColor: isBackingUp ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: isBackingUp ? 'wait' : 'pointer', fontWeight: 'bold' }}
             >
               {isBackingUp ? 'Executing Backup...' : 'Run Single Backup'}
             </button>
@@ -242,7 +259,6 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
 
           <div style={{ borderTop: '1px dashed #444', paddingTop: '20px' }}>
             <h4 style={{ color: '#fff', marginBottom: '10px' }}>2. Bulk Backup</h4>
-            <p style={{ fontSize: '0.85rem', color: '#aaa', marginTop: 0 }}>Pull and store configurations for multiple devices.</p>
             
             <div style={{ display: 'flex', gap: '10px', marginBottom: '15px' }}>
               <input type="text" placeholder="Search devices..." value={maintBackupSearch} onChange={(e) => setMaintBackupSearch(e.target.value)} style={{ flex: 1, padding: '10px', backgroundColor: '#1e1e1e', border: '1px solid #444', color: 'white', borderRadius: '4px' }} />
@@ -285,20 +301,29 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
               </div>
             </div>
             
+            {/* VIEWER RBAC: Button unlocked for viewers! */}
             <button 
               onClick={handleBulkBackup} 
-              disabled={isBulkBackingUp || userRole !== 'admin'} 
-              title={userRole !== 'admin' ? "Administrator access required" : ""}
-              style={{ width: '100%', padding: '10px', backgroundColor: (isBulkBackingUp || userRole !== 'admin') ? '#555' : '#007acc', color: (userRole !== 'admin') ? '#aaa' : '#fff', border: '1px solid #555', borderRadius: '4px', cursor: (isBulkBackingUp || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+              disabled={isBulkBackingUp} 
+              style={{ width: '100%', padding: '10px', backgroundColor: isBulkBackingUp ? '#555' : '#007acc', color: 'white', border: '1px solid #555', borderRadius: '4px', cursor: isBulkBackingUp ? 'wait' : 'pointer', fontWeight: 'bold' }}
             >
               {isBulkBackingUp ? 'Executing Bulk Backup...' : 'Run Bulk Backup'}
             </button>
-
           </div>
         </div>
 
-        {/* --- RIGHT PANEL: RESTORE --- */}
-        <div style={{ flex: 1, backgroundColor: '#252526', padding: '25px', borderRadius: '8px', border: '1px solid #333' }}>
+        {/* --- RIGHT PANEL: RESTORE (Admin Only) --- */}
+        <div style={{ flex: 1, backgroundColor: '#252526', padding: '25px', borderRadius: '8px', border: '1px solid #333', opacity: userRole !== 'admin' ? 0.5 : 1, pointerEvents: userRole !== 'admin' ? 'none' : 'auto', position: 'relative' }}>
+          
+          {/* Overlay for Viewers */}
+          {userRole !== 'admin' && (
+            <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(30,30,30,0.6)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 10, borderRadius: '8px' }}>
+              <div style={{ backgroundColor: '#f44336', color: 'white', padding: '10px 20px', borderRadius: '4px', fontWeight: 'bold' }}>
+                🔒 Administrator Access Required
+              </div>
+            </div>
+          )}
+
           <h3 style={{ marginTop: 0, color: '#e6a23c', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Restore Operations</h3>
             <div style={{ marginBottom: '20px' }}>
               <h4 style={{ color: '#fff', marginBottom: '10px' }}>1. Select Configuration Version</h4>
@@ -344,7 +369,6 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
             </div>
           <div style={{ marginBottom: '25px' }}>
             <h4 style={{ color: '#fff', marginBottom: '10px' }}>2. Select Target Devices</h4>
-            <p style={{ fontSize: '0.85rem', color: '#aaa', marginTop: 0 }}>Choose which devices will receive this configuration.</p>
             <input type="text" placeholder="Search devices to restore..." value={maintRestoreSearch} onChange={(e) => setMaintRestoreSearch(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: '#1e1e1e', border: '1px solid #444', color: 'white', borderRadius: '4px' }} />
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div style={{ backgroundColor: '#1e1e1e', border: '1px solid #444', borderRadius: '4px', overflow: 'hidden' }}>
@@ -363,40 +387,17 @@ export default function Maintenance({ devices, archiveFiles, userRole }) {
                   </div>
                 )}
               </div>
-              <div style={{ backgroundColor: '#1e1e1e', border: '1px solid #444', borderRadius: '4px', overflow: 'hidden' }}>
-                <div onClick={() => setIsRestoreRoutersOpen(!isRestoreRoutersOpen)} style={{ padding: '10px 15px', backgroundColor: '#2a2a2a', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: isRestoreRoutersOpen ? '1px solid #444' : 'none' }}>
-                  <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#ccc' }}>Routers ({maintRestoreRouters.length} selected)</span>
-                  <span style={{ fontSize: '0.8rem', color: '#888' }}>{isRestoreRoutersOpen ? '▼' : '▶'}</span>
-                </div>
-                {isRestoreRoutersOpen && (
-                  <div style={{ maxHeight: '150px', overflowY: 'auto', padding: '10px' }}>
-                    {restoreFilteredRouters.map(r => (
-                      <label key={r.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', borderRadius: '4px', backgroundColor: maintRestoreRouters.includes(r.hostname) ? '#007acc22' : 'transparent' }}>
-                        <input type="checkbox" checked={maintRestoreRouters.includes(r.hostname)} onChange={() => toggleSelection(r.hostname, maintRestoreRouters, setMaintRestoreRouters)} style={{ marginRight: '10px' }} />
-                        <span style={{ fontSize: '0.85rem' }}>{r.hostname}</span>
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
-          </div>
-          <div style={{ padding: '15px', backgroundColor: '#f4433611', border: '1px solid #f4433655', borderRadius: '4px', marginBottom: '15px' }}>
-            <span style={{ color: '#f44336', fontWeight: 'bold', fontSize: '0.9rem' }}>⚠️ Warning:</span>
-            <span style={{ color: '#aaa', fontSize: '0.85rem', marginLeft: '5px' }}>Restoring a configuration will overwrite the current running-config on the selected targets.</span>
           </div>
           
           <button 
             onClick={handleRestore} 
-            disabled={isRestoring || userRole !== 'admin'} 
-            title={userRole !== 'admin' ? "Administrator access required" : ""}
-            style={{ width: '100%', padding: '12px', backgroundColor: (isRestoring || userRole !== 'admin') ? '#555' : '#e6a23c', color: (isRestoring || userRole !== 'admin') ? '#aaa' : 'black', border: 'none', borderRadius: '4px', cursor: (isRestoring || userRole !== 'admin') ? 'not-allowed' : 'pointer', fontWeight: 'bold', fontSize: '1rem' }}
+            disabled={isRestoring} 
+            style={{ width: '100%', padding: '12px', backgroundColor: isRestoring ? '#555' : '#e6a23c', color: 'black', border: 'none', borderRadius: '4px', cursor: isRestoring ? 'wait' : 'pointer', fontWeight: 'bold', fontSize: '1rem' }}
           >
             {isRestoring ? 'Pushing Configurations...' : 'Execute Restore'}
           </button>
-
         </div>
-        
       </div>
     </div>
   );
