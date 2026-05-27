@@ -10,11 +10,16 @@ class DeviceCreate(BaseModel):
     device_type: str
     os_type: str
     username: str
+    pos_x: Optional[float] = 100.0       
+    pos_y: Optional[float] = 100.0       
+    floor: Optional[str] = "Floor 1"     
 
 # This is the shape of the data we RETURN to the user
 # It ingerits everything from DeviceCreate, but adds the DB-generated ID
 class DeviceResponse(DeviceCreate):
     id: int
+    status: Optional[str] = "unknown"   
+    last_seen: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -24,6 +29,9 @@ class DeviceUpdate(BaseModel):
     device_type: Optional[str] = None
     os_type: Optional[str] = None
     username: Optional[str] = None
+    pos_x: Optional[float] = None        
+    pos_y: Optional[float] = None        
+    floor: Optional[str] = None          
 
 # --- CONFIG GENERATOR SCHEMAS ---
 
@@ -102,6 +110,7 @@ class ScheduledJobBase(BaseModel):
     cron_hour: Optional[str] = None
     cron_minute: Optional[str] = None
     interval_hours: Optional[int] = None
+    run_once_time: Optional[datetime] = None
 
 class ScheduledJobCreate(ScheduledJobBase):
     pass
@@ -116,3 +125,25 @@ class ScheduledJobResponse(ScheduledJobBase):
 
     class Config:
         from_attributes = True
+
+
+# --- NEW: TOPOLOGY LINK SCHEMAS ---
+class EdgeBase(BaseModel):
+    source_hostname: str
+    source_port: str
+    target_hostname: str
+    target_port: str
+    link_type: Optional[str] = "ethernet"
+    current_utilization: Optional[float] = 0.0
+
+class EdgeResponse(EdgeBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+# Used when React drops a bunch of dragged coordinates back to the API
+class CoordinateUpdate(BaseModel):
+    id: int
+    pos_x: float
+    pos_y: float

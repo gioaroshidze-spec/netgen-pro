@@ -1,21 +1,39 @@
-from sqlalchemy import Column, Integer, String, DateTime, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float
 from database import Base
 from datetime import datetime, timezone
 
 class NetworkDevice(Base):
-    # This is the actual name of the table inside the SQLite database
     __tablename__ = "network_devices"
 
-    # Columns for our table
     id = Column(Integer, primary_key=True, index=True)
     hostname = Column(String, unique=True, index=True)
     ip_address = Column(String, unique=True, index=True)
-    device_type = Column(String) # e.g., 'switch', 'router'
-    os_type = Column(String, default="cisco")
+    device_type = Column(String)          # e.g., 'switch', 'router'
+    os_type = Column(String, default="cisco") # 'cisco', 'aruba', 'hpe', 'mikrotik'
     username = Column(String)
+    
+    # --- VISUALIZATION PILLARS ---
+    pos_x = Column(Float, default=100.0)       # 2D Canvas X Coordinate
+    pos_y = Column(Float, default=100.0)       # 2D Canvas Y Coordinate
+    floor = Column(String, default="Floor 1")  # Multi-level environment zone layering
 
-    # Note: We will handle passwords and ssh keys securely later!
 
+class TopologyEdge(Base):
+    __tablename__ = "topology_edges"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Connection Source (Local Node and Port)
+    source_hostname = Column(String, index=True)
+    source_port = Column(String)
+    
+    # Connection Target (Remote Node and Port)
+    target_hostname = Column(String, index=True)
+    target_port = Column(String)
+    
+    # Metadata for Heatmapping / Interconnection Status
+    link_type = Column(String, default="ethernet")    # trunk, access, etherchannel
+    current_utilization = Column(Float, default=0.0)  # Live bandwidth allocation metric
 
 
 class EventLog(Base):
@@ -23,65 +41,53 @@ class EventLog(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    event_type = Column(String, index=True)     # e.g., 'Configuration', 'Maintenance', 'Inventory', 'Auth'
-    severity = Column(String, index=True)       # e.g., 'INFO', 'SUCCESS', 'WARNING', 'ERROR'
+    event_type = Column(String, index=True)      # 'Configuration', 'Maintenance', 'Inventory', 'Auth'
+    severity = Column(String, index=True)        # 'INFO', 'SUCCESS', 'WARNING', 'ERROR'
     author = Column(String, default="System", index=True)
-    target_devices = Column(JSON, default=list)  # JSON Array of hostnames: ["cctv_sw1", "cctv_sw2"]
-    details = Column(JSON, default=dict)  # Flexible JSON payload for prompts, diffs, or simple messages
+    target_devices = Column(JSON, default=list)  # Array of hostnames: ["cctv_sw1"]
+    details = Column(JSON, default=dict)         # Deep forensic execution payloads
 
-# --- CONFIGURATION TEMPLATES MODEL ---
 
 class ConfiguraitonTemplate(Base):
     __tablename__ = "configuration_templates"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    category = Column(String, index=True)
+    category = Column(String, index=True)        # 'Switching', 'Routing', 'Security'
     description = Column(String)
     payload = Column(JSON)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
-# --- USER / AUTHENTICATION
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    role = Column(String, default="admin")
+    role = Column(String, default="admin")       # 'admin', 'viewer'
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON
-from database import Base
-from datetime import datetime, timezone
-
-# ... (Keep your existing User and NetworkDevice models here) ...
 
 class ScheduledJob(Base):
     __tablename__ = "scheduled_jobs"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    job_type = Column(String)  # e.g., 'backup', 'template_push'
+    job_type = Column(String)        # 'backup', 'template_push'
+    target_devices = Column(JSON)    # Array of target hostnames
+    job_payload = Column(JSON)       # Checkbox parameters or target raw template configurations
     
-    # We store arrays and dictionaries as JSON so the schema is completely flexible
-    target_devices = Column(JSON)  # List of hostnames (e.g., ["cctv_sw1", "test2"])
-    job_payload = Column(JSON)     # Options: { "save_archive": true } OR { "template_id": 4, "prompt": "..." }
-    
-    # --- Scheduling Parameters ---
-    # If using Cron (Specific Days/Times)
-    cron_day_of_week = Column(String, nullable=True) # e.g., "mon,wed,fri" or "*"
-    cron_hour = Column(String, nullable=True)        # e.g., "2" (for 2 AM)
-    cron_minute = Column(String, nullable=True)      # e.g., "0"
-    
-    # If using Interval (Every X hours)
-    interval_hours = Column(Integer, nullable=True)  # e.g., 12
+    # Recurrence Windows
+    cron_day_of_week = Column(String, nullable=True)
+    cron_hour = Column(String, nullable=True)
+    cron_minute = Column(String, nullable=True)
+    interval_hours = Column(Integer, nullable=True)
     run_once_time = Column(DateTime, nullable=True)
     
-    # --- State and Audit ---
-    is_active = Column(Boolean, default=True)        # Allows you to pause/turn off the job
-    created_by = Column(String)                      # The username of the author
+    # State and Auditing
+    is_active = Column(Boolean, default=True)
+    created_by = Column(String)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    last_run_status = Column(String, default="Pending") # 'Success', 'Failed', 'Pending'
+    last_run_status = Column(String, default="Pending")
     last_run_time = Column(DateTime, nullable=True)

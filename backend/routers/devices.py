@@ -105,6 +105,8 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
         mapped_devices.append({
             "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
             "device_type": device.device_type, "os_type": device.os_type,
-            "username": device.username, "status": status
+            "username": device.username, "status": status,
+            "pos_x": device.pos_x, "pos_y": device.pos_y,
+            "floor": device.floor
         })
     return mapped_devices
