@@ -9,6 +9,7 @@ import CLI from './components/CLI'
 import Login from './components/Login'
 import Users from './components/Users'
 import Dashboard from './components/Dashboard'
+import Topology from './components/Topology' // <-- NEW: IMPORT TOPOLOGY
 
 // --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
@@ -17,11 +18,11 @@ function App() {
   // --- AUTHENTICATION & ROLE STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
   const userRole = localStorage.getItem('role') || 'viewer'
-  const currentUsername = localStorage.getItem('username') //
+  const currentUsername = localStorage.getItem('username') 
 
   // --- STANDARD APP STATE ---
   const [activeTab, setActiveTab] = useState(() => {
-    return localStorage.getItem('vnmsActiveTab') || 'Dashboard' // <-- Default to Dashboard
+    return localStorage.getItem('vnmsActiveTab') || 'Dashboard' 
   })
   useEffect(() => {
     if (isAuthenticated) {
@@ -43,7 +44,8 @@ function App() {
   const [dropdownSearch, setDropdownSearch] = useState('')
 
   // --- DYNAMIC TABS BASED ON ROLE ---
-  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
+  // NEW: ADDED 'Topology' TO THE TABS ARRAY
+  const TABS = ['Dashboard', 'Topology', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
   
   // ONLY the exact 'admin' account gets the user creation tab
   if (currentUsername === 'admin') {
@@ -61,7 +63,7 @@ function App() {
   const fetchNetworkStatus = () => {
     setIsRefreshing(true)
     fetch(MAP_URL, {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- INJECT TOKEN
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
     })
       .then(res => {
         if (!res.ok) throw new Error("Unauthorized");
@@ -72,14 +74,12 @@ function App() {
   }
 
   useEffect(() => {
-    // Prevent fetching if we aren't logged in yet!
     if (!isAuthenticated) return;
 
     fetchNetworkStatus()
     
-    // Fetch archive files on load
     fetch('http://127.0.0.1:8000/archive/files', {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- INJECT TOKEN
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
     })
       .then(res => res.json())
       .then(data => setArchiveFiles(data))
@@ -109,7 +109,6 @@ function App() {
     setList(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname])
   }
 
-  // --- GATEKEEPER: IF NOT LOGGED IN, ONLY SHOW LOGIN SCREEN ---
   if (!isAuthenticated) {
     return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
   }
@@ -222,7 +221,7 @@ function App() {
 
           {/* TAB: DASHBOARD */}
           {activeTab === 'Dashboard' && <Dashboard devices={devices} setActiveTab={setActiveTab} userRole={userRole} />}
-          
+
           {/* TAB: MAINTENANCE */}
           {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} userRole={userRole} />}
 
@@ -243,6 +242,9 @@ function App() {
 
           {/* TAB: EVENT LOGS */}
           {activeTab === 'Event Logs' && <EventLogs />}
+
+          {/* TAB: TOPOLOGY (NEW!) */}
+          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} />}
 
           {/* TAB: USERS */}
           {activeTab === 'Users' && <Users />}
