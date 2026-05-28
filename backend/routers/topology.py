@@ -28,7 +28,7 @@ def update_coordinates(nodes: List[schemas.CoordinateUpdate], db: Session = Depe
     return {"status": "success", "message": "Layout coordinates saved."}
 
 # ==========================================
-# --- NEW: AUTOMATED DISCOVERY ENGINE ---
+# --- AUTOMATED DISCOVERY ENGINE ---
 # ==========================================
 def background_discovery(username: str):
     """Logs into switches, reads CDP/LLDP tables, and builds the topology map."""
@@ -45,7 +45,7 @@ def background_discovery(username: str):
         discovered_edges = 0
         rogue_devices_found = []
         
-        # --- NEW: Track unique node connections to prevent double-cables ---
+        # Track unique node connections to prevent double-cables
         processed_pairs = set()
 
         for device in devices:
@@ -100,7 +100,6 @@ def background_discovery(username: str):
                                     break
 
                             # --- DE-DUPLICATION CHECK ---
-                            # Sort hostnames alphabetically to make a bidirectional key
                             link_key = tuple(sorted([device.hostname, clean_target]))
                             if link_key in processed_pairs:
                                 continue
@@ -141,10 +140,70 @@ def trigger_discovery(background_tasks: BackgroundTasks, db: Session = Depends(g
     return {"message": "Automated Network Discovery initiated. The map will update shortly."}
 
 # ==========================================
-# --- KEEP REBOOT FUNCTION BELOW ---
+# --- LIVE TELEMETRY ENGINE ---
+# ==========================================
+@router.get("/topology/telemetry/{device_id}")
+def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """JIT (Just-in-Time) polling endpoint for live map tooltips."""
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+        
+    if device.os_type != "cisco":
+        return {"cpu": "N/A (Cisco Only)", "memory": "N/A", "uptime": "N/A"}
+        
+    try:
+        connection_params = {
+            'device_type': 'cisco_ios', 'host': device.ip_address,
+            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'fast_cli': True, 'auth_timeout': 5, 'banner_timeout': 5
+        }
+        
+        with ConnectHandler(**connection_params) as net_connect:
+            # 1. Parse CPU
+            cpu_out = net_connect.send_command("show processes cpu | include CPU utilization")
+            cpu = "Nominal"
+            if "five minutes:" in cpu_out:
+                cpu = cpu_out.split("five minutes:")[-1].strip()
+
+            # 2. Parse Memory (Strict Column Parser)
+            mem_out = net_connect.send_command("show memory statistics | include Processor")
+            if not mem_out.strip():
+                mem_out = net_connect.send_command("show memory | include Processor")
+            
+            mem = "Unknown"
+            if "Processor" in mem_out:
+                # Example line: Processor   83ED86C   366112452   71362380  294750072
+                parts = mem_out.strip().split()
+                if len(parts) >= 4:
+                    try:
+                        # parts[0] = "Processor"
+                        # parts[1] = Head (Hexadecimal string we must ignore)
+                        # parts[2] = Total bytes
+                        # parts[3] = Used bytes
+                        total = float(parts[2].replace(',', ''))
+                        used = float(parts[3].replace(',', ''))
+                        mem = f"{int((used/total)*100)}% Used"
+                    except Exception as e:
+                        mem = "Data unreadable"
+
+            # 3. Parse Uptime
+            ver_out = net_connect.send_command("show version | include uptime")
+            uptime = "Active"
+            if "uptime is" in ver_out:
+                uptime = ver_out.split("uptime is")[-1].strip()
+
+            return {"cpu": cpu, "memory": mem, "uptime": uptime}
+
+    except Exception as e:
+        print(f"Telemetry failed for {device.hostname}: {e}")
+        return {"cpu": "Timeout", "memory": "Timeout", "uptime": "Timeout"}
+
+# ==========================================
+# --- REBOOT ENGINE ---
 # ==========================================
 def background_reboot(device_id: int, username: str):
-    # [KEEP YOUR EXISTING REBOOT FUNCTION EXACTLY AS IT WAS]
     db = SessionLocal()
     try:
         device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()

@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import { CanvasAddon } from '@xterm/addon-canvas';
 
 // --- INDIVIDUAL TERMINAL COMPONENT ---
-function TerminalWindow({ device, isActive, onClose }) {
+export function TerminalWindow({ device, isActive, onClose }) {
   const terminalRef = useRef(null);
   const termInstance = useRef(null);
   const fitAddonInstance = useRef(null);

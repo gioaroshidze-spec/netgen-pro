@@ -1,13 +1,15 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import ReactFlow, { Background, Controls, MiniMap, applyNodeChanges, applyEdgeChanges, Handle, Position } from 'reactflow';
+import ReactFlow, { Background, Controls, MiniMap, applyNodeChanges, applyEdgeChanges, Handle, Position, getBezierPath, EdgeLabelRenderer, BaseEdge } from 'reactflow';
 import PropTypes from 'prop-types'; 
 import dagre from 'dagre'; 
 import 'reactflow/dist/style.css';
 
-// --- CUSTOM NODE: HEALTH HALOS & IMAGES ---
+// --- CUSTOM NODE: HEALTH HALOS, IMAGES & LIVE TELEMETRY ---
 const CustomDeviceNode = ({ data }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imgError, setImgError] = useState(false); 
+  const [telemetry, setTelemetry] = useState({ cpu: 'Fetching...', memory: 'Fetching...', uptime: 'Fetching...' });
+  const [hasFetched, setHasFetched] = useState(false);
   
   const isGhost = data.status === 'unmanaged';
   const isOnline = data.status === 'online';
@@ -19,19 +21,36 @@ const CustomDeviceNode = ({ data }) => {
   if (data.device_type === 'router') iconSrc = '/router-icon.png';
   if (isGhost) iconSrc = ''; 
 
+  const handleMouseEnter = () => {
+    setIsHovered(true);
+    if (!hasFetched && !isGhost && isOnline && data.full_device) {
+      setHasFetched(true); 
+      fetch(`http://127.0.0.1:8000/topology/telemetry/${data.full_device.id}`, {
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      })
+      .then(res => res.ok ? res.json() : null)
+      .then(metrics => {
+        if (metrics) setTelemetry(metrics);
+        else setTelemetry({ cpu: 'Error', memory: 'Error', uptime: 'Error' });
+      })
+      .catch(() => setTelemetry({ cpu: 'Timeout', memory: 'Timeout', uptime: 'Timeout' }));
+    }
+  };
+
   return (
     <div 
-      onMouseEnter={() => setIsHovered(true)} onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={handleMouseEnter} 
+      onMouseLeave={() => setIsHovered(false)}
       style={{ padding: '15px', borderRadius: '8px', backgroundColor: '#252526', border: `2px solid ${borderColor}`, boxShadow: glow, color: '#fff', textAlign: 'center', minWidth: '130px', position: 'relative', opacity: isGhost ? 0.7 : 1 }}
     >
       <Handle type="target" position={Position.Top} style={{ background: '#555' }} />
       
       {isHovered && !isGhost && (
-        <div style={{ position: 'absolute', top: '-75px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#1a1a1a', padding: '10px', borderRadius: '6px', zIndex: 10, whiteSpace: 'nowrap', border: '1px solid #444', fontSize: '0.75rem', boxShadow: '0 4px 10px rgba(0,0,0,0.5)', textAlign: 'left' }}>
-          <div style={{ color: '#007acc', fontWeight: 'bold', borderBottom: '1px solid #333', paddingBottom: '3px', marginBottom: '5px' }}>Device Telemetry</div>
-          <div><span style={{ color: '#aaa' }}>CPU Load:</span> Nominal</div>
-          <div><span style={{ color: '#aaa' }}>Memory:</span> 42% Used</div>
-          <div><span style={{ color: '#aaa' }}>Uptime:</span> Active</div>
+        <div style={{ position: 'absolute', top: '-85px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#1a1a1a', padding: '12px', borderRadius: '6px', zIndex: 10, whiteSpace: 'nowrap', border: '1px solid #444', fontSize: '0.75rem', boxShadow: '0 4px 15px rgba(0,0,0,0.8)', textAlign: 'left' }}>
+          <div style={{ color: '#007acc', fontWeight: 'bold', borderBottom: '1px solid #333', paddingBottom: '5px', marginBottom: '8px' }}>Live Telemetry</div>
+          <div style={{ marginBottom: '3px' }}><span style={{ color: '#aaa' }}>CPU Load:</span> <span style={{ color: '#fff' }}>{telemetry.cpu}</span></div>
+          <div style={{ marginBottom: '3px' }}><span style={{ color: '#aaa' }}>Memory:</span> <span style={{ color: '#fff' }}>{telemetry.memory}</span></div>
+          <div><span style={{ color: '#aaa' }}>Uptime:</span> <span style={{ color: '#fff' }}>{telemetry.uptime}</span></div>
         </div>
       )}
 
@@ -49,16 +68,67 @@ const CustomDeviceNode = ({ data }) => {
 };
 CustomDeviceNode.propTypes = { data: PropTypes.object.isRequired };
 
+// --- NEW: STRICT LEFT-TO-RIGHT GEOMETRY EDGE ---
+const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data }) => {
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX, sourceY, sourcePosition,
+    targetX, targetY, targetPosition,
+  });
+
+  // --- THE FIX: STRICT X-AXIS ANCHORING ---
+  // Text reads left-to-right. The port for the leftmost node must be printed first.
+  let shouldFlip = false;
+  
+  if (sourceX > targetX) {
+    // The Target node is physically further left than the Source node
+    shouldFlip = true;
+  } else if (sourceX === targetX && sourceY > targetY) {
+    // Perfectly vertical line, but Target node is physically higher
+    shouldFlip = true;
+  }
+
+  const displayLabel = shouldFlip 
+    ? `${data.target_port} ⟷ ${data.source_port}` 
+    : `${data.source_port} ⟷ ${data.target_port}`;
+
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} style={style} markerEnd={markerEnd} />
+      <EdgeLabelRenderer>
+        <div
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            background: '#1e1e1e',
+            color: '#ccc',
+            padding: '2px 6px',
+            borderRadius: '4px',
+            fontSize: '10px',
+            fontWeight: 700,
+            fontFamily: 'monospace',
+            pointerEvents: 'all',
+          }}
+          className="nodrag nopan"
+        >
+          {displayLabel}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+};
+CustomEdge.propTypes = { id: PropTypes.string, sourceX: PropTypes.number, sourceY: PropTypes.number, targetX: PropTypes.number, targetY: PropTypes.number, sourcePosition: PropTypes.string, targetPosition: PropTypes.string, style: PropTypes.object, markerEnd: PropTypes.string, data: PropTypes.object };
 // --- MAIN TOPOLOGY CANVAS ENGINE ---
 export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
+  const [selectedEdge, setSelectedEdge] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
 
   const nodeTypes = useMemo(() => ({ customDevice: CustomDeviceNode }), []);
+  const edgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []); // <-- REGISTER CUSTOM EDGE
 
   useEffect(() => {
     fetch('http://127.0.0.1:8000/topology/edges', {
@@ -66,11 +136,8 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     })
     .then(res => res.ok ? res.json() : [])
     .then(edgeData => {
-      // Load saved position cache for ghost nodes
       let savedGhostPositions = {};
-      try {
-        savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}');
-      } catch (e) { console.error(e); }
+      try { savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}'); } catch (e) { console.error(e); }
 
       let currentNodes = devices.map((dev, index) => {
         let currentX = dev.pos_x ?? 100;
@@ -92,7 +159,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         if (!currentNodes.find(n => n.id === edge.target_hostname)) {
           const savedPos = savedGhostPositions[edge.target_hostname];
           let ghostX = savedPos ? savedPos.x : 50 + (rogueOffset * 150);
-          let ghostY = savedPos ? savedPos.y : 400; // Place cleanly below core switches initially
+          let ghostY = savedPos ? savedPos.y : 400; 
 
           currentNodes.push({
             id: edge.target_hostname,
@@ -103,13 +170,17 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           rogueOffset++;
         }
 
+        // --- UPGRADED: USING CUSTOM EDGE ---
         formattedEdges.push({
           id: `e-${edge.id}`,
           source: edge.source_hostname,
           target: edge.target_hostname,
-          label: `${edge.source_port} ⟷ ${edge.target_port}`, 
-          labelBgStyle: { fill: '#1e1e1e', color: '#fff', fillOpacity: 0.8 },
-          labelStyle: { fill: '#ccc', fontWeight: 700, fontSize: 10, fontFamily: 'monospace' },
+          type: 'customEdge', // <-- TRIGGER OUR NEW COMPONENT
+          data: {
+            source_port: edge.source_port,
+            target_port: edge.target_port,
+            utilization: edge.current_utilization
+          },
           animated: edge.current_utilization > 50,
           style: { 
             stroke: edge.link_type === 'trunk' ? '#007acc' : '#777',
@@ -135,25 +206,14 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     dagreGraph.setDefaultEdgeLabel(() => ({}));
     dagreGraph.setGraph({ rankdir: 'TB', nodesep: 150, ranksep: 200 });
 
-    nodes.forEach((node) => {
-      dagreGraph.setNode(node.id, { width: 160, height: 160 }); 
-    });
-
-    edges.forEach((edge) => {
-      dagreGraph.setEdge(edge.source, edge.target);
-    });
+    nodes.forEach((node) => { dagreGraph.setNode(node.id, { width: 160, height: 160 }); });
+    edges.forEach((edge) => { dagreGraph.setEdge(edge.source, edge.target); });
 
     dagre.layout(dagreGraph);
 
     const layoutedNodes = nodes.map((node) => {
       const nodeWithPosition = dagreGraph.node(node.id);
-      return {
-        ...node,
-        position: {
-          x: nodeWithPosition.x - 80, 
-          y: nodeWithPosition.y - 80, 
-        },
-      };
+      return { ...node, position: { x: nodeWithPosition.x - 80, y: nodeWithPosition.y - 80 } };
     });
 
     setNodes(layoutedNodes);
@@ -163,9 +223,19 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)), []);
   
   const onNodeClick = (event, node) => {
+    setSelectedEdge(null);
     if (node.data.status !== 'unmanaged') setSelectedDevice(node.data.full_device);
   };
-  const onPaneClick = () => setSelectedDevice(null);
+
+  const onEdgeClick = (event, edge) => {
+    setSelectedDevice(null);
+    setSelectedEdge(edge);
+  };
+
+  const onPaneClick = () => {
+    setSelectedDevice(null);
+    setSelectedEdge(null);
+  };
 
   const saveLayout = () => {
     setIsSaving(true);
@@ -174,36 +244,24 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
     nodes.forEach(n => {
       if (n.data.status === 'unmanaged') {
-        // Save unmanaged coordinates locally
         ghostPositions[n.id] = { x: n.position.x, y: n.position.y };
       } else {
         const targetDevice = devices.find(d => d.hostname === n.id);
         if (targetDevice) {
-          coordinates.push({
-            id: parseInt(targetDevice.id, 10),
-            pos_x: parseFloat(n.position.x.toFixed(2)),
-            pos_y: parseFloat(n.position.y.toFixed(2))
-          });
+          coordinates.push({ id: parseInt(targetDevice.id, 10), pos_x: parseFloat(n.position.x.toFixed(2)), pos_y: parseFloat(n.position.y.toFixed(2)) });
         }
       }
     });
 
-    // Write ghost layout schema to disk memory
     localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
 
     fetch('http://127.0.0.1:8000/topology/update-coordinates', {
       method: 'POST', 
-      headers: { 
-        'Content-Type': 'application/json', 
-        'Authorization': `Bearer ${localStorage.getItem('token')}` 
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       body: JSON.stringify(coordinates)
     })
     .then(async res => {
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Server rejected coordinate format.");
-      }
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Server rejected coordinate format."); }
       return res.json();
     })
     .then(() => {
@@ -211,11 +269,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       alert("✅ Map layout saved successfully!");
       if (fetchNetworkStatus) fetchNetworkStatus();
     })
-    .catch(err => {
-      console.error(err);
-      alert(`❌ Failed to save layout: ${err.message}`);
-      setIsSaving(false);
-    });
+    .catch(err => { console.error(err); alert(`❌ Failed to save layout: ${err.message}`); setIsSaving(false); });
   };
 
   const handleDiscovery = () => {
@@ -244,28 +298,26 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 120px)', position: 'relative', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
       <div style={{ flex: 1, backgroundColor: '#1e1e1e' }}>
-        <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick} onPaneClick={onPaneClick} nodeTypes={nodeTypes} fitView attributionPosition="bottom-left">
+        <ReactFlow 
+          nodes={nodes} edges={edges} 
+          onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} 
+          onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick} 
+          nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView attributionPosition="bottom-left"
+        >
           <Background color="#333" gap={20} />
           <Controls style={{ backgroundColor: '#252526', fill: '#fff' }} />
           <MiniMap nodeColor="#007acc" maskColor="rgba(0,0,0,0.5)" style={{ backgroundColor: '#252526' }} />
         </ReactFlow>
 
-        <div style={{ position: 'absolute', top: '20px', right: selectedDevice ? '340px' : '20px', transition: 'right 0.3s ease', zIndex: 10, display: 'flex', gap: '10px' }}>
-          <button onClick={onLayout} style={{ padding: '10px 20px', backgroundColor: '#e6a23c', color: '#000', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
-            ✨ Auto-Layout
-          </button>
-          
-          <button onClick={handleDiscovery} disabled={isDiscovering || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isDiscovering ? '#555' : '#4caf50', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
-            {isDiscovering ? 'Scanning...' : '🔍 Run Auto-Discovery'}
-          </button>
-          
-          <button onClick={saveLayout} disabled={isSaving || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isSaving ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
-            {isSaving ? 'Saving...' : '💾 Save Map Layout'}
-          </button>
+        <div style={{ position: 'absolute', top: '20px', right: (selectedDevice || selectedEdge) ? '340px' : '20px', transition: 'right 0.3s ease', zIndex: 10, display: 'flex', gap: '10px' }}>
+          <button onClick={onLayout} style={{ padding: '10px 20px', backgroundColor: '#e6a23c', color: '#000', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>✨ Auto-Layout</button>
+          <button onClick={handleDiscovery} disabled={isDiscovering || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isDiscovering ? '#555' : '#4caf50', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>{isDiscovering ? 'Scanning...' : '🔍 Run Auto-Discovery'}</button>
+          <button onClick={saveLayout} disabled={isSaving || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isSaving ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>{isSaving ? 'Saving...' : '💾 Save Map Layout'}</button>
         </div>
       </div>
 
-      <div style={{ width: '320px', backgroundColor: '#252526', borderLeft: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', position: 'absolute', right: selectedDevice ? '0' : '-320px', top: 0, bottom: 0, transition: 'right 0.3s ease', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)' }}>
+      <div style={{ width: '320px', backgroundColor: '#252526', borderLeft: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', position: 'absolute', right: (selectedDevice || selectedEdge) ? '0' : '-320px', top: 0, bottom: 0, transition: 'right 0.3s ease', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)' }}>
+        
         {selectedDevice && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #444', paddingBottom: '15px', marginBottom: '20px' }}>
@@ -280,8 +332,57 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
             <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>Quick Actions</h4>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <button onClick={() => setActiveTab('Configuration')} style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer', textAlign: 'left', fontWeight: 'bold' }}>⚡ Push Template</button>
-              <button onClick={() => setActiveTab('CLI')} style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer', textAlign: 'left', fontWeight: 'bold' }}>💻 Open Secure CLI</button>
+              <button 
+                onClick={() => {
+                  const popWidth = window.screen.width * 0.5, popHeight = window.screen.height * 0.5;
+                  const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
+                  window.open(`/?cli=${selectedDevice.id}`, `cli_${selectedDevice.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+                }} 
+                style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer', textAlign: 'left', fontWeight: 'bold' }}
+              >
+                💻 Open Secure CLI
+              </button>
               <button onClick={handleReboot} disabled={isRebooting || userRole !== 'admin'} style={{ padding: '12px', backgroundColor: isRebooting ? '#555' : '#f4433622', color: isRebooting ? '#aaa' : '#f44336', border: `1px solid ${isRebooting ? '#555' : '#f44336'}`, borderRadius: '4px', cursor: (isRebooting || userRole !== 'admin') ? 'not-allowed' : 'pointer', textAlign: 'left', fontWeight: 'bold', marginTop: '20px' }}>{isRebooting ? 'Executing...' : '↻ Safe Reboot'}</button>
+            </div>
+          </>
+        )}
+
+        {selectedEdge && (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #444', paddingBottom: '15px', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0, color: '#fff' }}>Link Interconnect</h3>
+              <button onClick={() => setSelectedEdge(null)} style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '1.2rem' }}>✖</button>
+            </div>
+
+            <div style={{ backgroundColor: '#1a1a1a', padding: '15px', borderRadius: '6px', marginBottom: '30px', border: '1px solid #333' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ textAlign: 'left', maxWidth: '40%' }}>
+                  <strong style={{ color: '#007acc', display: 'block', fontSize: '1.1rem', wordBreak: 'break-all' }}>{selectedEdge.source}</strong>
+                  <span style={{ fontFamily: 'monospace', color: '#4caf50', fontSize: '0.85rem' }}>{selectedEdge.data?.source_port}</span>
+                </div>
+                
+                <div style={{ flex: 1, borderBottom: '2px dashed #555', margin: '0 10px', position: 'relative', top: '-5px' }}>
+                  <span style={{ position: 'absolute', top: '-18px', left: '50%', transform: 'translateX(-50%)', fontSize: '0.75rem', color: '#aaa', whiteSpace: 'nowrap', backgroundColor: '#1a1a1a', padding: '0 5px' }}>
+                    {selectedEdge.data?.utilization}% Util
+                  </span>
+                </div>
+
+                <div style={{ textAlign: 'right', maxWidth: '40%' }}>
+                  <strong style={{ color: '#007acc', display: 'block', fontSize: '1.1rem', wordBreak: 'break-all' }}>{selectedEdge.target}</strong>
+                  <span style={{ fontFamily: 'monospace', color: '#4caf50', fontSize: '0.85rem' }}>{selectedEdge.data?.target_port}</span>
+                </div>
+              </div>
+            </div>
+
+            <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>Port Operations</h4>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#555', border: '1px solid #333', borderRadius: '4px', cursor: 'not-allowed', textAlign: 'left', fontWeight: 'bold' }}>
+                ⚡ Bounce {selectedEdge.source} Port
+              </button>
+              <button style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#555', border: '1px solid #333', borderRadius: '4px', cursor: 'not-allowed', textAlign: 'left', fontWeight: 'bold' }}>
+                ⚡ Bounce {selectedEdge.target} Port
+              </button>
+              <div style={{ fontSize: '0.75rem', color: '#888', fontStyle: 'italic', marginTop: '5px' }}>Port Operations Module offline. (Coming soon)</div>
             </div>
           </>
         )}
