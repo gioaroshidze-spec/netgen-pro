@@ -244,8 +244,7 @@ function App() {
           {activeTab === 'Event Logs' && <EventLogs />}
 
           {/* TAB: TOPOLOGY (NEW!) */}
-          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} />}
-
+          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} fetchNetworkStatus={fetchNetworkStatus} />}
           {/* TAB: USERS */}
           {activeTab === 'Users' && <Users />}
 

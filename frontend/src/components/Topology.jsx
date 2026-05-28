@@ -50,7 +50,7 @@ const CustomDeviceNode = ({ data }) => {
 CustomDeviceNode.propTypes = { data: PropTypes.object.isRequired };
 
 // --- MAIN TOPOLOGY CANVAS ENGINE ---
-export default function Topology({ devices, userRole, setActiveTab }) {
+export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState(null);
@@ -66,6 +66,12 @@ export default function Topology({ devices, userRole, setActiveTab }) {
     })
     .then(res => res.ok ? res.json() : [])
     .then(edgeData => {
+      // Load saved position cache for ghost nodes
+      let savedGhostPositions = {};
+      try {
+        savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}');
+      } catch (e) { console.error(e); }
+
       let currentNodes = devices.map((dev, index) => {
         let currentX = dev.pos_x ?? 100;
         let currentY = dev.pos_y ?? 100;
@@ -84,10 +90,14 @@ export default function Topology({ devices, userRole, setActiveTab }) {
 
       edgeData.forEach(edge => {
         if (!currentNodes.find(n => n.id === edge.target_hostname)) {
+          const savedPos = savedGhostPositions[edge.target_hostname];
+          let ghostX = savedPos ? savedPos.x : 50 + (rogueOffset * 150);
+          let ghostY = savedPos ? savedPos.y : 400; // Place cleanly below core switches initially
+
           currentNodes.push({
             id: edge.target_hostname,
             type: 'customDevice',
-            position: { x: 50 + (rogueOffset * 150), y: -150 }, 
+            position: { x: ghostX, y: ghostY }, 
             data: { label: edge.target_hostname, status: 'unmanaged', os: 'Unmanaged / Rogue', full_device: null }
           });
           rogueOffset++;
@@ -157,29 +167,29 @@ export default function Topology({ devices, userRole, setActiveTab }) {
   };
   const onPaneClick = () => setSelectedDevice(null);
 
-  // --- UPGRADED: STRICT SAVING WITH CACHE MUTATION ---
   const saveLayout = () => {
     setIsSaving(true);
     const coordinates = [];
+    const ghostPositions = {};
 
     nodes.forEach(n => {
-      if (n.data.status !== 'unmanaged') {
-        // Find the device in the parent state array
+      if (n.data.status === 'unmanaged') {
+        // Save unmanaged coordinates locally
+        ghostPositions[n.id] = { x: n.position.x, y: n.position.y };
+      } else {
         const targetDevice = devices.find(d => d.hostname === n.id);
         if (targetDevice) {
-          // 1. Mutate the local memory cache to survive tab switching!
-          targetDevice.pos_x = n.position.x;
-          targetDevice.pos_y = n.position.y;
-          
-          // 2. Build the exact payload for the database
           coordinates.push({
-            id: targetDevice.id,
-            pos_x: n.position.x,
-            pos_y: n.position.y
+            id: parseInt(targetDevice.id, 10),
+            pos_x: parseFloat(n.position.x.toFixed(2)),
+            pos_y: parseFloat(n.position.y.toFixed(2))
           });
         }
       }
     });
+
+    // Write ghost layout schema to disk memory
+    localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
 
     fetch('http://127.0.0.1:8000/topology/update-coordinates', {
       method: 'POST', 
@@ -199,6 +209,7 @@ export default function Topology({ devices, userRole, setActiveTab }) {
     .then(() => {
       setIsSaving(false);
       alert("✅ Map layout saved successfully!");
+      if (fetchNetworkStatus) fetchNetworkStatus();
     })
     .catch(err => {
       console.error(err);
@@ -213,7 +224,7 @@ export default function Topology({ devices, userRole, setActiveTab }) {
       method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
     })
     .then(res => res.json())
-    .then(data => {
+    .then(() => {
       alert("Discovery Engine launched in the background. Please wait 10-15 seconds and refresh the dashboard.");
       setIsDiscovering(false);
     })
@@ -278,4 +289,4 @@ export default function Topology({ devices, userRole, setActiveTab }) {
     </div>
   );
 }
-Topology.propTypes = { devices: PropTypes.array.isRequired, userRole: PropTypes.string.isRequired, setActiveTab: PropTypes.func.isRequired };
+Topology.propTypes = { devices: PropTypes.array.isRequired, userRole: PropTypes.string.isRequired, setActiveTab: PropTypes.func.isRequired, fetchNetworkStatus: PropTypes.func };

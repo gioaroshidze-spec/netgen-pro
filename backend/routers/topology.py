@@ -36,7 +36,7 @@ def background_discovery(username: str):
     try:
         print("[DISCOVERY ENGINE] Starting Automated Network Discovery...")
         
-        # 1. Wipe the old map edges clean so we don't get duplicates
+        # 1. Wipe the old map edges clean
         db.query(models.TopologyEdge).delete()
         db.commit()
         
@@ -44,15 +44,15 @@ def background_discovery(username: str):
         managed_hostnames = {d.hostname for d in devices}
         discovered_edges = 0
         rogue_devices_found = []
+        
+        # --- NEW: Track unique node connections to prevent double-cables ---
+        processed_pairs = set()
 
         for device in devices:
-            # For Phase 3, we focus on Cisco CDP parsing
             if device.os_type == 'cisco':
                 connection_params = {
-                    'device_type': 'cisco_ios',
-                    'host': device.ip_address,
-                    'username': device.username,
-                    'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                    'device_type': 'cisco_ios', 'host': device.ip_address,
+                    'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
                     'fast_cli': True
                 }
 
@@ -61,54 +61,76 @@ def background_discovery(username: str):
                         net_connect.enable()
                         output = net_connect.send_command("show cdp neighbors")
                         
-                        # --- THE PARSER ---
-                        # Skip header lines and empty lines
-                        lines = [line.strip() for line in output.splitlines() if line.strip() and not line.startswith("Capability") and not line.startswith("Device ID")]
+                        # --- THE ADVANCED FSM PARSER ---
+                        lines = [line.strip() for line in output.splitlines() if line.strip()]
+                        current_target = None
                         
                         for line in lines:
-                            # Typical Cisco CDP Line:
-                            # cctv_sw2.local    Gig 1/0/1         120      S I      WS-C2960X Gig 1/0/24
+                            if "Capability" in line or "Device ID" in line or "Total cdp" in line or "entries" in line:
+                                continue
+
                             parts = re.split(r'\s+', line)
+
+                            is_interface_col0 = parts[0].lower().startswith(('gig', 'fas', 'ten', 'eth', 'port'))
+                            is_interface_col1 = len(parts) > 1 and parts[1].lower().startswith(('gig', 'fas', 'ten', 'eth', 'port'))
                             
-                            if len(parts) >= 6:
-                                # Clean the target hostname (strip domain names if present)
-                                raw_target = parts[0].split('.')[0]
+                            if not is_interface_col0 and not is_interface_col1:
+                                current_target = parts[0].split('.')[0]
+                                continue
                                 
-                                # Reconstruct port names (e.g. ['Gig', '1/0/1'] -> 'Gig1/0/1')
-                                source_port = f"{parts[1]}{parts[2]}" 
+                            if is_interface_col0:
+                                if not current_target: continue
+                                raw_target = current_target
+                                source_port = f"{parts[0]}{parts[1]}"
                                 target_port = f"{parts[-2]}{parts[-1]}"
-                                
-                                # Trunk detection logic (simplified for UI mapping)
-                                link_type = "trunk" if "Gig" in source_port or "Ten" in source_port else "access"
-                                
-                                new_edge = models.TopologyEdge(
-                                    source_hostname=device.hostname,
-                                    source_port=source_port,
-                                    target_hostname=raw_target,
-                                    target_port=target_port,
-                                    link_type=link_type,
-                                    current_utilization=0.0
-                                )
-                                db.add(new_edge)
-                                discovered_edges += 1
-                                
-                                if raw_target not in managed_hostnames:
-                                    rogue_devices_found.append(raw_target)
+                                current_target = None
+                            elif is_interface_col1 and len(parts) >= 6:
+                                raw_target = parts[0].split('.')[0]
+                                source_port = f"{parts[1]}{parts[2]}"
+                                target_port = f"{parts[-2]}{parts[-1]}"
+                                current_target = None
+                            else:
+                                continue
+
+                            # --- FUZZY MATCH LOGIC ---
+                            clean_target = raw_target
+                            for m_host in managed_hostnames:
+                                if m_host.lower().replace('_', '').replace('-', '') == raw_target.lower().replace('_', '').replace('-', ''):
+                                    clean_target = m_host
+                                    break
+
+                            # --- DE-DUPLICATION CHECK ---
+                            # Sort hostnames alphabetically to make a bidirectional key
+                            link_key = tuple(sorted([device.hostname, clean_target]))
+                            if link_key in processed_pairs:
+                                continue
+                            processed_pairs.add(link_key)
+
+                            link_type = "trunk" if "gig" in source_port.lower() or "ten" in source_port.lower() else "access"
+                            
+                            new_edge = models.TopologyEdge(
+                                source_hostname=device.hostname,
+                                source_port=source_port,
+                                target_hostname=clean_target,
+                                target_port=target_port,
+                                link_type=link_type,
+                                current_utilization=0.0
+                            )
+                            db.add(new_edge)
+                            discovered_edges += 1
+                            
+                            if clean_target not in managed_hostnames:
+                                rogue_devices_found.append(clean_target)
 
                 except Exception as e:
                     print(f"[DISCOVERY ENGINE] Failed to map {device.hostname}: {e}")
 
         db.commit()
-        
-        log_event(
-            db=db, event_type="Inventory", severity="SUCCESS", author=username, target_devices=[],
-            details={"action": "Automated Topology Discovery Completed", "edges_mapped": discovered_edges, "rogues_detected": rogue_devices_found}
-        )
-        print(f"[DISCOVERY ENGINE] Map Built! {discovered_edges} connections found.")
+        log_event(db=db, event_type="Inventory", severity="SUCCESS", author=username, target_devices=[], details={"action": "Automated Topology Discovery Completed", "edges_mapped": discovered_edges})
+        print(f"[DISCOVERY ENGINE] Map Built! {discovered_edges} unique connections found.")
 
     except Exception as e:
         print(f"[DISCOVERY ENGINE] Fatal Error: {str(e)}")
-        log_event(db=db, event_type="Inventory", severity="ERROR", author=username, details={"action": "Discovery Failed", "error": str(e)})
     finally:
         db.close()
 
