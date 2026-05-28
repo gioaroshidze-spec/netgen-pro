@@ -45,7 +45,7 @@ function App() {
 
   // --- DYNAMIC TABS BASED ON ROLE ---
   // NEW: ADDED 'Topology' TO THE TABS ARRAY
-  const TABS = ['Dashboard', 'Topology', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs']
+  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs', 'Topology']
   
   // ONLY the exact 'admin' account gets the user creation tab
   if (currentUsername === 'admin') {
