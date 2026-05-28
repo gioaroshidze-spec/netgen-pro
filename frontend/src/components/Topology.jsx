@@ -68,22 +68,18 @@ const CustomDeviceNode = ({ data }) => {
 };
 CustomDeviceNode.propTypes = { data: PropTypes.object.isRequired };
 
-// --- NEW: STRICT LEFT-TO-RIGHT GEOMETRY EDGE ---
+// --- DYNAMIC GEOMETRY-AWARE EDGE ---
 const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data }) => {
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX, sourceY, sourcePosition,
     targetX, targetY, targetPosition,
   });
 
-  // --- THE FIX: STRICT X-AXIS ANCHORING ---
-  // Text reads left-to-right. The port for the leftmost node must be printed first.
+  // Strict X-Axis Anchoring for Left-to-Right Port Labels
   let shouldFlip = false;
-  
   if (sourceX > targetX) {
-    // The Target node is physically further left than the Source node
     shouldFlip = true;
   } else if (sourceX === targetX && sourceY > targetY) {
-    // Perfectly vertical line, but Target node is physically higher
     shouldFlip = true;
   }
 
@@ -117,6 +113,7 @@ const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
   );
 };
 CustomEdge.propTypes = { id: PropTypes.string, sourceX: PropTypes.number, sourceY: PropTypes.number, targetX: PropTypes.number, targetY: PropTypes.number, sourcePosition: PropTypes.string, targetPosition: PropTypes.string, style: PropTypes.object, markerEnd: PropTypes.string, data: PropTypes.object };
+
 // --- MAIN TOPOLOGY CANVAS ENGINE ---
 export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus }) {
   const [nodes, setNodes] = useState([]);
@@ -126,9 +123,12 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
+  
+  // Track which port action is executing
+  const [bouncingPort, setBouncingPort] = useState(null);
 
   const nodeTypes = useMemo(() => ({ customDevice: CustomDeviceNode }), []);
-  const edgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []); // <-- REGISTER CUSTOM EDGE
+  const edgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []); 
 
   useEffect(() => {
     fetch('http://127.0.0.1:8000/topology/edges', {
@@ -170,12 +170,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           rogueOffset++;
         }
 
-        // --- UPGRADED: USING CUSTOM EDGE ---
         formattedEdges.push({
           id: `e-${edge.id}`,
           source: edge.source_hostname,
           target: edge.target_hostname,
-          type: 'customEdge', // <-- TRIGGER OUR NEW COMPONENT
+          type: 'customEdge', 
           data: {
             source_port: edge.source_port,
             target_port: edge.target_port,
@@ -295,6 +294,27 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(() => setIsRebooting(false));
   };
 
+  // --- PORT ACTIONS HANDLER ---
+  const handlePortAction = (hostname, port, action) => {
+    let warningMsg = `⚠️ DANGER: You are about to ${action.toUpperCase()} port ${port} on ${hostname}. Proceed?`;
+    if (!window.confirm(warningMsg)) return;
+    
+    const actionKey = `${hostname}-${port}`;
+    setBouncingPort(actionKey); 
+
+    fetch('http://127.0.0.1:8000/topology/port-action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      body: JSON.stringify({ hostname, port, action })
+    })
+    .then(async res => {
+      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Failed to execute port action"); }
+      return res.json();
+    })
+    .then(data => { alert(`✅ ${data.message}`); setBouncingPort(null); })
+    .catch(err => { alert(`❌ Error: ${err.message}`); setBouncingPort(null); });
+  };
+
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 120px)', position: 'relative', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
       <div style={{ flex: 1, backgroundColor: '#1e1e1e' }}>
@@ -316,8 +336,9 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         </div>
       </div>
 
-      <div style={{ width: '320px', backgroundColor: '#252526', borderLeft: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', position: 'absolute', right: (selectedDevice || selectedEdge) ? '0' : '-320px', top: 0, bottom: 0, transition: 'right 0.3s ease', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)' }}>
+      <div style={{ width: '320px', backgroundColor: '#252526', borderLeft: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', position: 'absolute', right: (selectedDevice || selectedEdge) ? '0' : '-320px', top: 0, bottom: 0, transition: 'right 0.3s ease', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)', overflowY: 'auto' }}>
         
+        {/* --- NODE PANEL --- */}
         {selectedDevice && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #444', paddingBottom: '15px', marginBottom: '20px' }}>
@@ -347,6 +368,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           </>
         )}
 
+        {/* --- EDGE PANEL --- */}
         {selectedEdge && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #444', paddingBottom: '15px', marginBottom: '20px' }}>
@@ -374,15 +396,46 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
               </div>
             </div>
 
-            <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>Port Operations</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <button style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#555', border: '1px solid #333', borderRadius: '4px', cursor: 'not-allowed', textAlign: 'left', fontWeight: 'bold' }}>
-                ⚡ Bounce {selectedEdge.source} Port
-              </button>
-              <button style={{ padding: '12px', backgroundColor: '#1e1e1e', color: '#555', border: '1px solid #333', borderRadius: '4px', cursor: 'not-allowed', textAlign: 'left', fontWeight: 'bold' }}>
-                ⚡ Bounce {selectedEdge.target} Port
-              </button>
-              <div style={{ fontSize: '0.75rem', color: '#888', fontStyle: 'italic', marginTop: '5px' }}>Port Operations Module offline. (Coming soon)</div>
+            {/* DEVICE A (SOURCE) OPERATIONS */}
+            <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>
+              Port Ops: {selectedEdge.source}
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '25px' }}>
+              <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'shutdown')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ padding: '8px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>🔴 Shut</button>
+              <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>🟢 No Shut</button>
+              <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>⚡ Bounce Port</button>
+              <button 
+                onClick={() => {
+                  const targetDev = devices.find(d => d.hostname === selectedEdge.source);
+                  if(!targetDev) return;
+                  const popWidth = window.screen.width * 0.4, popHeight = window.screen.height * 0.6;
+                  const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
+                  window.open(`/?pcap=${targetDev.id}&port=${encodeURIComponent(selectedEdge.data.source_port)}`, `pcap_${targetDev.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+                }}
+                disabled={!devices.find(d => d.hostname === selectedEdge.source)}
+                style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.source) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px' }}
+              >🕵️‍♂️ Launch Packet Trace</button>
+            </div>
+
+            {/* DEVICE B (TARGET) OPERATIONS */}
+            <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>
+              Port Ops: {selectedEdge.target}
+            </h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' }}>
+              <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'shutdown')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ padding: '8px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🔴 Shut</button>
+              <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🟢 No Shut</button>
+              <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>⚡ Bounce Port</button>
+              <button 
+                onClick={() => {
+                  const targetDev = devices.find(d => d.hostname === selectedEdge.target);
+                  if(!targetDev) return;
+                  const popWidth = window.screen.width * 0.4, popHeight = window.screen.height * 0.6;
+                  const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
+                  window.open(`/?pcap=${targetDev.id}&port=${encodeURIComponent(selectedEdge.data.target_port)}`, `pcap_${targetDev.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
+                }}
+                disabled={!devices.find(d => d.hostname === selectedEdge.target)}
+                style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.target) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}
+              >🕵️‍♂️ Launch Packet Trace</button>
             </div>
           </>
         )}

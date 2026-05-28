@@ -1,5 +1,6 @@
 import os
 import re
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List
@@ -236,3 +237,48 @@ def trigger_device_reboot(device_id: int, background_tasks: BackgroundTasks, db:
     if not device: raise HTTPException(status_code=404, detail="Target network device not found.")
     background_tasks.add_task(background_reboot, device.id, current_user.username)
     return {"message": f"Reboot instruction queued for {device.hostname}. Connection will drop momentarily."}
+
+# --- PORT OPERATIONS ENGINE ---
+class PortOperationRequest(BaseModel):
+    hostname: str
+    port: str
+    action: str  # 'bounce', 'shutdown', or 'no_shutdown'
+
+@router.post("/topology/port-action")
+def execute_port_action(request: PortOperationRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    """Executes granular interface state changes."""
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname == request.hostname).first()
+    
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Target device {request.hostname} not found.")
+
+    try:
+        connection_params = {
+            'device_type': 'cisco_ios', 'host': device.ip_address,
+            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'fast_cli': True
+        }
+        
+        with ConnectHandler(**connection_params) as net_connect:
+            net_connect.enable()
+            
+            commands = [f"interface {request.port}"]
+            if request.action == 'bounce':
+                commands.extend(["shutdown", "no shutdown"])
+            elif request.action == 'shutdown':
+                commands.append("shutdown")
+            elif request.action == 'no_shutdown':
+                commands.append("no shutdown")
+                
+            output = net_connect.send_config_set(commands)
+            
+        log_event(
+            db=db, event_type="Maintenance", severity="WARNING", author=current_user.username, 
+            target_devices=[device.hostname], 
+            details={"action": f"Port {request.action.upper()}", "port": request.port, "output": output}
+        )
+        return {"message": f"Successfully executed {request.action} on {request.port}."}
+
+    except Exception as e:
+        log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Port Action Failed", "port": request.port, "error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Port action failed: {str(e)}")
