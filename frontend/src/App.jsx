@@ -27,6 +27,22 @@ function App() {
   
   const [loadedTemplate, setLoadedTemplate] = useState(null)
   const [devices, setDevices] = useState([])
+
+  // --- ORGANIZATION DATA STATE ---
+  const [orgData, setOrgData] = useState([
+    { 
+      id: 'bldg-1', name: 'Headquarters', floors: [
+        { id: 'flr-1', name: 'Floor 1', zones: [ { id: 'zone-1', name: 'Server Room A' }, { id: 'zone-2', name: 'IDF Closet 1' } ] },
+        { id: 'flr-2', name: 'Floor 2', zones: [ { id: 'zone-3', name: 'IDF Closet 2' } ] }
+      ]
+    },
+    {
+      id: 'bldg-2', name: 'Branch Office', floors: [
+        { id: 'flr-3', name: 'Ground Floor', zones: [ { id: 'zone-4', name: 'Main Rack' } ] }
+      ]
+    }
+  ]);
+
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState({})
   
@@ -217,9 +233,9 @@ function App() {
           {activeTab === 'Templates' && <Templates setActiveTab={setActiveTab} setLoadedTemplate={setLoadedTemplate} />}
           {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} loadedTemplate={loadedTemplate} setLoadedTemplate={setLoadedTemplate} userRole={userRole} />}
           {activeTab === 'CLI' && <CLI devices={devices} />}
-          {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} userRole={userRole} />}
+          {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} userRole={userRole} orgData={orgData} setOrgData={setOrgData} />}
           {activeTab === 'Event Logs' && <EventLogs />}
-          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} fetchNetworkStatus={fetchNetworkStatus} />}
+          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} fetchNetworkStatus={fetchNetworkStatus} orgData={orgData} />}
           {activeTab === 'Users' && <Users />}
         </div>
       </div>
