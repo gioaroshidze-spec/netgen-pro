@@ -9,7 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.orm import Session
 from netmiko import ConnectHandler
 from apscheduler.triggers.date import DateTrigger
-
+from routers.topology import background_discovery
 from database import SessionLocal
 import models
 from logger import log_event
@@ -161,4 +161,14 @@ def sync_jobs_to_scheduler():
 
 def start_scheduler():
     sync_jobs_to_scheduler()
+    
+    # --- NEW: Permanent System Discovery Sweep (1 Hour) ---
+    scheduler.add_job(
+        background_discovery,
+        trigger=IntervalTrigger(hours=1),
+        args=["System_Scheduler"], # This sets the author in the Audit Logs!
+        id="system_topology_discovery",
+        replace_existing=True
+    )
+    
     scheduler.start()

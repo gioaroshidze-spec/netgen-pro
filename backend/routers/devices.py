@@ -4,6 +4,9 @@ from database import get_db
 import models, schemas
 import subprocess
 from logger import log_event
+import re
+import subprocess
+import concurrent.futures
 
 # --- NEW: IMPORT THE BOUNCERS ---
 from routers.auth import get_current_user, get_current_admin
@@ -86,27 +89,38 @@ def delete_device(device_id: int, db: Session = Depends(get_db), current_user: m
     )
     return {"message": "Device deleted"}
 
-# READING INVENTORY requires ANY LOGGED-IN USER
 @router.get("/network-map/")
 def get_network_map(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     devices = db.query(models.NetworkDevice).all()
-    mapped_devices = []
-
-    for device in devices:
+    
+    def ping_device(device):
         clean_ip = device.ip_address.strip()
         command = ["ping", "-c", "1", "-W", "1", clean_ip]
         response = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if response.returncode != 0:
-            print(f"PING FAILED for {clean_ip}")
-        
-        status = "online" if response.returncode == 0 else "offline"
+            return {
+                "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
+                "device_type": device.device_type, "os_type": device.os_type,
+                "username": device.username, "status": "offline", "latency": "N/A",
+                "pos_x": device.pos_x, "pos_y": device.pos_y, "floor": device.floor
+            }
+        else:
+            match = re.search(r'time=([\d.]+)\s*ms', response.stdout)
+            latency = f"{match.group(1)}ms" if match else "<1ms"
+            
+            return {
+                "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
+                "device_type": device.device_type, "os_type": device.os_type,
+                "username": device.username, "status": "online", "latency": latency,
+                "pos_x": device.pos_x, "pos_y": device.pos_y, "floor": device.floor
+            }
 
-        mapped_devices.append({
-            "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
-            "device_type": device.device_type, "os_type": device.os_type,
-            "username": device.username, "status": status,
-            "pos_x": device.pos_x, "pos_y": device.pos_y,
-            "floor": device.floor
-        })
+    # Blast out all pings simultaneously (Lightning fast)
+    mapped_devices = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        results = executor.map(ping_device, devices)
+        for res in results:
+            mapped_devices.append(res)
+
     return mapped_devices

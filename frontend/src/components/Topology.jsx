@@ -4,7 +4,7 @@ import PropTypes from 'prop-types';
 import dagre from 'dagre'; 
 import 'reactflow/dist/style.css';
 
-// --- CUSTOM NODE: HEALTH HALOS, IMAGES & LIVE TELEMETRY ---
+// --- CUSTOM NODE: HEALTH HALOS, IMAGES, LIVE TELEMETRY & LATENCY ---
 const CustomDeviceNode = ({ data }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imgError, setImgError] = useState(false); 
@@ -44,6 +44,13 @@ const CustomDeviceNode = ({ data }) => {
       style={{ padding: '15px', borderRadius: '8px', backgroundColor: '#252526', border: `2px solid ${borderColor}`, boxShadow: glow, color: '#fff', textAlign: 'center', minWidth: '130px', position: 'relative', opacity: isGhost ? 0.7 : 1 }}
     >
       <Handle type="target" position={Position.Top} style={{ background: '#555' }} />
+
+      {/* --- NEW: ICMP LATENCY HEALTH BADGE --- */}
+      {!isGhost && isOnline && data.latency && (
+        <div style={{ position: 'absolute', top: '-10px', right: '-10px', backgroundColor: '#1e1e1e', border: `1px solid ${borderColor}`, color: borderColor, padding: '2px 8px', borderRadius: '12px', fontSize: '0.65rem', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.5)', zIndex: 5 }}>
+          {data.latency}
+        </div>
+      )}
       
       {isHovered && !isGhost && (
         <div style={{ position: 'absolute', top: '-85px', left: '50%', transform: 'translateX(-50%)', backgroundColor: '#1a1a1a', padding: '12px', borderRadius: '6px', zIndex: 10, whiteSpace: 'nowrap', border: '1px solid #444', fontSize: '0.75rem', boxShadow: '0 4px 15px rgba(0,0,0,0.8)', textAlign: 'left' }}>
@@ -75,7 +82,6 @@ const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
     targetX, targetY, targetPosition,
   });
 
-  // Strict X-Axis Anchoring for Left-to-Right Port Labels
   let shouldFlip = false;
   if (sourceX > targetX) {
     shouldFlip = true;
@@ -124,7 +130,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
   
-  // Track which port action is executing
   const [bouncingPort, setBouncingPort] = useState(null);
 
   const nodeTypes = useMemo(() => ({ customDevice: CustomDeviceNode }), []);
@@ -139,24 +144,56 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       let savedGhostPositions = {};
       try { savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}'); } catch (e) { console.error(e); }
 
-      let currentNodes = devices.map((dev, index) => {
-        let currentX = dev.pos_x ?? 100;
-        let currentY = dev.pos_y ?? 100;
-        if (currentX === 100 && currentY === 100) currentX = 100 + (index * 180);
+      // --- 1. FIND UNIQUE FLOORS TO CREATE ZONE BOXES ---
+      const uniqueFloors = [...new Set(devices.map(d => d.floor || "Unassigned"))];
+      let currentNodes = [];
 
-        return {
+      // --- 2. CREATE THE PARENT GROUP NODES ---
+      uniqueFloors.forEach((floor, index) => {
+        currentNodes.push({
+          id: `zone-${floor}`,
+          type: 'group',
+          position: { x: 50 + (index * 400), y: 50 }, 
+          style: { 
+            backgroundColor: 'rgba(255, 255, 255, 0.02)', 
+            border: '2px dashed #444', 
+            borderRadius: '12px',
+            width: 350,
+            height: 350,
+            zIndex: -1
+          },
+          data: { label: floor } 
+        });
+      });
+
+      // --- 3. MAP THE DEVICES AND ATTACH TO PARENTS ---
+      devices.forEach((dev, index) => {
+        let currentX = dev.pos_x ?? 50;
+        let currentY = dev.pos_y ?? 50;
+        
+        currentNodes.push({
           id: dev.hostname, 
           type: 'customDevice',
+          parentNode: `zone-${dev.floor || "Unassigned"}`,
+          extent: 'parent',
           position: { x: currentX, y: currentY },
-          data: { label: dev.hostname, ip: dev.ip_address, status: dev.status, device_type: dev.device_type, os: dev.os_type, full_device: dev },
-        };
+          data: { 
+            label: dev.hostname, 
+            ip: dev.ip_address, 
+            status: dev.status, 
+            latency: dev.latency, 
+            device_type: dev.device_type, 
+            os: dev.os_type, 
+            full_device: dev 
+          },
+        });
       });
 
       const formattedEdges = [];
       let rogueOffset = 0;
 
       edgeData.forEach(edge => {
-        if (!currentNodes.find(n => n.id === edge.target_hostname)) {
+        if (!devices.find(d => d.hostname === edge.target_hostname)) {
           const savedPos = savedGhostPositions[edge.target_hostname];
           let ghostX = savedPos ? savedPos.x : 50 + (rogueOffset * 150);
           let ghostY = savedPos ? savedPos.y : 400; 
@@ -170,6 +207,9 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           rogueOffset++;
         }
 
+        const isBlocked = edge.link_type.includes('_blocked');
+        const baseLinkType = edge.link_type.replace('_blocked', '');
+
         formattedEdges.push({
           id: `e-${edge.id}`,
           source: edge.source_hostname,
@@ -178,12 +218,15 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           data: {
             source_port: edge.source_port,
             target_port: edge.target_port,
-            utilization: edge.current_utilization
+            utilization: edge.current_utilization,
+            original_stroke: baseLinkType === 'trunk' ? '#007acc' : '#777' 
           },
           animated: edge.current_utilization > 50,
           style: { 
-            stroke: edge.link_type === 'trunk' ? '#007acc' : '#777',
-            strokeWidth: edge.link_type === 'trunk' ? 3 : 1.5 
+            stroke: isBlocked ? '#555' : (baseLinkType === 'trunk' ? '#007acc' : '#777'),
+            strokeWidth: baseLinkType === 'trunk' ? 3 : 1.5,
+            strokeDasharray: isBlocked ? '5, 5' : 'none',
+            opacity: isBlocked ? 0.5 : 1
           },
         });
       });
@@ -191,7 +234,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       setNodes(prev => {
         return currentNodes.map(cn => {
           const existing = prev.find(p => p.id === cn.id);
-          if (existing) cn.position = existing.position;
+          if (existing && existing.type !== 'group') cn.position = existing.position;
           return cn;
         });
       });
@@ -223,7 +266,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   
   const onNodeClick = (event, node) => {
     setSelectedEdge(null);
-    if (node.data.status !== 'unmanaged') setSelectedDevice(node.data.full_device);
+    if (node.data && node.data.status !== 'unmanaged' && node.type !== 'group') setSelectedDevice(node.data.full_device);
   };
 
   const onEdgeClick = (event, edge) => {
@@ -242,6 +285,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     const ghostPositions = {};
 
     nodes.forEach(n => {
+      if (n.type === 'group') return;
       if (n.data.status === 'unmanaged') {
         ghostPositions[n.id] = { x: n.position.x, y: n.position.y };
       } else {
@@ -294,7 +338,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(() => setIsRebooting(false));
   };
 
-  // --- PORT ACTIONS HANDLER ---
   const handlePortAction = (hostname, port, action) => {
     let warningMsg = `⚠️ DANGER: You are about to ${action.toUpperCase()} port ${port} on ${hostname}. Proceed?`;
     if (!window.confirm(warningMsg)) return;
@@ -313,6 +356,15 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     })
     .then(data => { alert(`✅ ${data.message}`); setBouncingPort(null); })
     .catch(err => { alert(`❌ Error: ${err.message}`); setBouncingPort(null); });
+  };
+
+  const handlePcap = (targetDev, targetPort) => {
+    if(!targetDev) return;
+    const token = localStorage.getItem('token');
+    const backendUrl = `http://127.0.0.1:8000/topology/pcap?device_id=${targetDev.id}&port=${encodeURIComponent(targetPort)}&token=${token}`;
+    const popWidth = window.screen.width * 0.4, popHeight = window.screen.height * 0.6;
+    const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
+    window.open(backendUrl, `pcap_${targetDev.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
   };
 
   return (
@@ -405,13 +457,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
               <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>🟢 No Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>⚡ Bounce Port</button>
               <button 
-                onClick={() => {
-                  const targetDev = devices.find(d => d.hostname === selectedEdge.source);
-                  if(!targetDev) return;
-                  const popWidth = window.screen.width * 0.4, popHeight = window.screen.height * 0.6;
-                  const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
-                  window.open(`/?pcap=${targetDev.id}&port=${encodeURIComponent(selectedEdge.data.source_port)}`, `pcap_${targetDev.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
-                }}
+                onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.source), selectedEdge.data.source_port)}
                 disabled={!devices.find(d => d.hostname === selectedEdge.source)}
                 style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.source) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px' }}
               >🕵️‍♂️ Launch Packet Trace</button>
@@ -426,13 +472,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
               <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🟢 No Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>⚡ Bounce Port</button>
               <button 
-                onClick={() => {
-                  const targetDev = devices.find(d => d.hostname === selectedEdge.target);
-                  if(!targetDev) return;
-                  const popWidth = window.screen.width * 0.4, popHeight = window.screen.height * 0.6;
-                  const left = (window.screen.width - popWidth) / 2, top = (window.screen.height - popHeight) / 2;
-                  window.open(`/?pcap=${targetDev.id}&port=${encodeURIComponent(selectedEdge.data.target_port)}`, `pcap_${targetDev.id}`, `width=${popWidth},height=${popHeight},left=${left},top=${top},resizable=yes,scrollbars=yes`);
-                }}
+                onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.target), selectedEdge.data.target_port)}
                 disabled={!devices.find(d => d.hostname === selectedEdge.target)}
                 style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.target) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}
               >🕵️‍♂️ Launch Packet Trace</button>

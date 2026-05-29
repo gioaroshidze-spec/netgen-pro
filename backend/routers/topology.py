@@ -1,13 +1,17 @@
 import os
 import re
+import time
+import uuid
+import tempfile
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db, SessionLocal
 import models, schemas
 from routers.auth import get_current_user, get_current_admin
-from netmiko import ConnectHandler
+from netmiko import ConnectHandler, file_transfer
 from logger import log_event
 
 router = APIRouter(tags=["Topology & Power"])
@@ -32,22 +36,17 @@ def update_coordinates(nodes: List[schemas.CoordinateUpdate], db: Session = Depe
 # --- AUTOMATED DISCOVERY ENGINE ---
 # ==========================================
 def background_discovery(username: str):
-    """Logs into switches, reads CDP/LLDP tables, and builds the topology map."""
+    """Logs into switches, reads CDP/LLDP & STP tables, and builds the topology map via Transactional Merge."""
     db = SessionLocal()
     try:
         print("[DISCOVERY ENGINE] Starting Automated Network Discovery...")
         
-        # 1. Wipe the old map edges clean
-        db.query(models.TopologyEdge).delete()
-        db.commit()
-        
         devices = db.query(models.NetworkDevice).all()
         managed_hostnames = {d.hostname for d in devices}
-        discovered_edges = 0
-        rogue_devices_found = []
         
-        # Track unique node connections to prevent double-cables
         processed_pairs = set()
+        new_edges_list = []
+        rogue_devices_found = []
 
         for device in devices:
             if device.os_type == 'cisco':
@@ -61,6 +60,16 @@ def background_discovery(username: str):
                     with ConnectHandler(**connection_params) as net_connect:
                         net_connect.enable()
                         output = net_connect.send_command("show cdp neighbors")
+                        
+                        # --- GRAB STP BLOCKED PORTS ---
+                        stp_output = net_connect.send_command("show spanning-tree")
+                        blocked_ports = []
+                        for stp_line in stp_output.splitlines():
+                            if "BLK" in stp_line or "ALT" in stp_line:
+                                parts = stp_line.split()
+                                if parts:
+                                    port_name = parts[0].replace("GigabitEthernet", "Gig").replace("FastEthernet", "Fas").replace("TenGigabitEthernet", "Ten")
+                                    blocked_ports.append(port_name)
                         
                         # --- THE ADVANCED FSM PARSER ---
                         lines = [line.strip() for line in output.splitlines() if line.strip()]
@@ -108,16 +117,17 @@ def background_discovery(username: str):
 
                             link_type = "trunk" if "gig" in source_port.lower() or "ten" in source_port.lower() else "access"
                             
-                            new_edge = models.TopologyEdge(
+                            if source_port in blocked_ports:
+                                link_type += "_blocked"
+                                
+                            new_edges_list.append(models.TopologyEdge(
                                 source_hostname=device.hostname,
                                 source_port=source_port,
                                 target_hostname=clean_target,
                                 target_port=target_port,
                                 link_type=link_type,
                                 current_utilization=0.0
-                            )
-                            db.add(new_edge)
-                            discovered_edges += 1
+                            ))
                             
                             if clean_target not in managed_hostnames:
                                 rogue_devices_found.append(clean_target)
@@ -125,11 +135,29 @@ def background_discovery(username: str):
                 except Exception as e:
                     print(f"[DISCOVERY ENGINE] Failed to map {device.hostname}: {e}")
 
+        # --- THE TRANSACTIONAL MERGE ---
+        existing_edges = db.query(models.TopologyEdge).all()
+        
+        def make_key(e): 
+            return f"{e.source_hostname}-{e.source_port}-{e.target_hostname}-{e.target_port}"
+            
+        existing_map = {make_key(e): e for e in existing_edges}
+        new_map = {make_key(e): e for e in new_edges_list}
+        
+        for key, edge in existing_map.items():
+            if key not in new_map:
+                db.delete(edge)
+                
+        for key, edge in new_map.items():
+            if key not in existing_map:
+                db.add(edge)
+
         db.commit()
-        log_event(db=db, event_type="Inventory", severity="SUCCESS", author=username, target_devices=[], details={"action": "Automated Topology Discovery Completed", "edges_mapped": discovered_edges})
-        print(f"[DISCOVERY ENGINE] Map Built! {discovered_edges} unique connections found.")
+        log_event(db=db, event_type="Inventory", severity="SUCCESS", author=username, target_devices=[], details={"action": "Automated Topology Discovery Completed", "edges_mapped": len(new_edges_list)})
+        print(f"[DISCOVERY ENGINE] Map Built! {len(new_edges_list)} connections mapped safely.")
 
     except Exception as e:
+        db.rollback()
         print(f"[DISCOVERY ENGINE] Fatal Error: {str(e)}")
     finally:
         db.close()
@@ -162,34 +190,26 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
         }
         
         with ConnectHandler(**connection_params) as net_connect:
-            # 1. Parse CPU
             cpu_out = net_connect.send_command("show processes cpu | include CPU utilization")
             cpu = "Nominal"
             if "five minutes:" in cpu_out:
                 cpu = cpu_out.split("five minutes:")[-1].strip()
 
-            # 2. Parse Memory (Strict Column Parser)
             mem_out = net_connect.send_command("show memory statistics | include Processor")
             if not mem_out.strip():
                 mem_out = net_connect.send_command("show memory | include Processor")
             
             mem = "Unknown"
             if "Processor" in mem_out:
-                # Example line: Processor   83ED86C   366112452   71362380  294750072
                 parts = mem_out.strip().split()
                 if len(parts) >= 4:
                     try:
-                        # parts[0] = "Processor"
-                        # parts[1] = Head (Hexadecimal string we must ignore)
-                        # parts[2] = Total bytes
-                        # parts[3] = Used bytes
                         total = float(parts[2].replace(',', ''))
                         used = float(parts[3].replace(',', ''))
                         mem = f"{int((used/total)*100)}% Used"
-                    except Exception as e:
+                    except Exception:
                         mem = "Data unreadable"
 
-            # 3. Parse Uptime
             ver_out = net_connect.send_command("show version | include uptime")
             uptime = "Active"
             if "uptime is" in ver_out:
@@ -200,6 +220,60 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
     except Exception as e:
         print(f"Telemetry failed for {device.hostname}: {e}")
         return {"cpu": "Timeout", "memory": "Timeout", "uptime": "Timeout"}
+
+# ==========================================
+# --- EPC PACKET CAPTURE ENGINE ---
+# ==========================================
+@router.get("/topology/pcap")
+def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    """Triggers Embedded Packet Capture (EPC), downloads via SCP, and serves to frontend."""
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Target device not found.")
+
+    try:
+        connection_params = {
+            'device_type': 'cisco_ios', 'host': device.ip_address,
+            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'fast_cli': True
+        }
+        
+        capture_name = "VNMS_CAP"
+        pcap_filename = f"vnms_{uuid.uuid4().hex[:8]}.pcap"
+        local_filepath = os.path.join(tempfile.gettempdir(), pcap_filename)
+
+        with ConnectHandler(**connection_params) as net_connect:
+            net_connect.enable()
+            net_connect.send_config_set([f"no monitor capture {capture_name}"])
+            
+            setup_cmds = [
+                f"monitor capture {capture_name} interface {port} both",
+                f"monitor capture {capture_name} match any",
+                f"monitor capture {capture_name} file location flash:{pcap_filename}",
+            ]
+            net_connect.send_config_set(setup_cmds)
+            net_connect.send_command_timing(f"monitor capture {capture_name} start")
+            
+            print(f"[EPC] Capturing traffic on {device.hostname} port {port} for 10 seconds...")
+            time.sleep(10)
+            
+            net_connect.send_command_timing(f"monitor capture {capture_name} stop")
+            
+            print(f"[EPC] Downloading {pcap_filename} from {device.hostname} via SCP...")
+            scp_transfer = file_transfer(
+                net_connect, source_file=pcap_filename, dest_file=local_filepath,
+                file_system="flash:", direction="get"
+            )
+            
+            net_connect.send_config_set([f"no monitor capture {capture_name}"])
+            net_connect.send_command_timing(f"delete flash:{pcap_filename}\n\n")
+
+        log_event(db=db, event_type="Maintenance", severity="INFO", author=current_user.username, target_devices=[device.hostname], details={"action": "Packet Trace Executed", "port": port, "file": pcap_filename})
+        return FileResponse(path=local_filepath, media_type="application/vnd.tcpdump.pcap", filename=f"{device.hostname}_{port.replace('/', '-')}_trace.pcap")
+
+    except Exception as e:
+        log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Packet Trace Failed", "port": port, "error": str(e)})
+        raise HTTPException(status_code=500, detail=f"EPC Capture failed: {str(e)}")
 
 # ==========================================
 # --- REBOOT ENGINE ---
@@ -238,11 +312,13 @@ def trigger_device_reboot(device_id: int, background_tasks: BackgroundTasks, db:
     background_tasks.add_task(background_reboot, device.id, current_user.username)
     return {"message": f"Reboot instruction queued for {device.hostname}. Connection will drop momentarily."}
 
+# ==========================================
 # --- PORT OPERATIONS ENGINE ---
+# ==========================================
 class PortOperationRequest(BaseModel):
     hostname: str
     port: str
-    action: str  # 'bounce', 'shutdown', or 'no_shutdown'
+    action: str  
 
 @router.post("/topology/port-action")
 def execute_port_action(request: PortOperationRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
@@ -272,11 +348,7 @@ def execute_port_action(request: PortOperationRequest, db: Session = Depends(get
                 
             output = net_connect.send_config_set(commands)
             
-        log_event(
-            db=db, event_type="Maintenance", severity="WARNING", author=current_user.username, 
-            target_devices=[device.hostname], 
-            details={"action": f"Port {request.action.upper()}", "port": request.port, "output": output}
-        )
+        log_event(db=db, event_type="Maintenance", severity="WARNING", author=current_user.username, target_devices=[device.hostname], details={"action": f"Port {request.action.upper()}", "port": request.port, "output": output})
         return {"message": f"Successfully executed {request.action} on {request.port}."}
 
     except Exception as e:
