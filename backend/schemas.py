@@ -2,6 +2,45 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+# ==========================================
+# --- NEW: ORGANIZATION SCHEMAS ---
+# ==========================================
+class ZoneBase(BaseModel):
+    name: str
+
+class ZoneResponse(ZoneBase):
+    id: int
+    class Config:
+        from_attributes = True
+
+class FloorBase(BaseModel):
+    name: str
+
+class FloorResponse(FloorBase):
+    id: int
+    zones: List[ZoneResponse] = []
+    class Config:
+        from_attributes = True
+
+class BuildingBase(BaseModel):
+    name: str
+
+class BuildingResponse(BuildingBase):
+    id: int
+    floors: List[FloorResponse] = []
+    class Config:
+        from_attributes = True
+
+class BuildingCreate(BuildingBase):
+    pass
+
+class FloorCreate(FloorBase):
+    building_id: int
+
+class ZoneCreate(ZoneBase):
+    floor_id: int
+
+
 # --- DEVICE CRUD SCHEMAS ---
 # This is the shape of the data we EXPECT the user to send us
 class DeviceCreate(BaseModel):
@@ -12,17 +51,19 @@ class DeviceCreate(BaseModel):
     username: str
     pos_x: Optional[float] = 100.0       
     pos_y: Optional[float] = 100.0       
-    floor: Optional[str] = "Floor 1"     
+    zone_id: Optional[int] = None # <-- REPLACED 'floor' with relational zone_id
 
 # This is the shape of the data we RETURN to the user
-# It ingerits everything from DeviceCreate, but adds the DB-generated ID
+# It inherits everything from DeviceCreate, but adds the DB-generated ID
 class DeviceResponse(DeviceCreate):
     id: int
-    status: Optional[str] = "unknown"   
+    status: Optional[str] = "unknown" 
+    latency: Optional[str] = "<1ms"  # Added to support map health badges
     last_seen: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
 class DeviceUpdate(BaseModel):
     hostname: Optional[str] = None
     ip_address: Optional[str] = None
@@ -31,7 +72,8 @@ class DeviceUpdate(BaseModel):
     username: Optional[str] = None
     pos_x: Optional[float] = None        
     pos_y: Optional[float] = None        
-    floor: Optional[str] = None          
+    zone_id: Optional[int] = None # <-- REPLACED 'floor' with relational zone_id
+
 
 # --- CONFIG GENERATOR SCHEMAS ---
 
@@ -45,6 +87,7 @@ class SwitchConfigRequest(BaseModel):
     default_gateway: str
     vlans: list[VlanConfig]
 
+
 # --- BACKUP REQUESTS ---
 class BackupOptions(BaseModel):
     save_nvram: bool
@@ -56,6 +99,7 @@ class BackupOptions(BaseModel):
 class BulkBackupRequest(BaseModel):
     device_ids: list[int]
     options: BackupOptions
+
 
 # --- CONFIGURATION ENGINE REQUESTS ---
 class AIConfigGenerate(BaseModel):
@@ -70,8 +114,8 @@ class SimulateConfigRequest(BaseModel):
     switches: list[str]
     routers: list[str]
 
-# --- EVENT LOG SCHEMAS ---
 
+# --- EVENT LOG SCHEMAS ---
 class EventLogCreate(BaseModel):
     event_type: str
     severity: str
@@ -83,8 +127,9 @@ class EventLogResponse(EventLogCreate):
     id: int
     timestamp: datetime
 
-    class config:
+    class Config: # Fixed 'config' capitalization to 'Config' for Pydantic standard
         from_attributes = True
+
 
 # --- CONFIGURATION TEMPLATE SCHEMAS ---
 class TemplateCreate(BaseModel):
@@ -99,6 +144,7 @@ class TemplateResponse(TemplateCreate):
 
     class Config:
         from_attributes = True
+
 
 # --- SCHEDULED JOBS SCHEMAS ---
 class ScheduledJobBase(BaseModel):
@@ -147,3 +193,19 @@ class CoordinateUpdate(BaseModel):
     id: int
     pos_x: float
     pos_y: float
+
+# Add these classes to the bottom of your existing schemas.py
+class SavedViewBase(BaseModel):
+    name: str
+    zone_ids: List[int]
+    coordinates: Dict[str, Dict[str, float]]
+
+class SavedViewCreate(SavedViewBase):
+    pass
+
+class SavedViewResponse(SavedViewBase):
+    id: int
+    user_id: int
+
+    class Config:
+        from_attributes = True

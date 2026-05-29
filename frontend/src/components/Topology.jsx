@@ -2,18 +2,19 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import ReactFlow, { Background, Controls, MiniMap, applyNodeChanges, applyEdgeChanges, Handle, Position, getBezierPath, EdgeLabelRenderer, BaseEdge } from 'reactflow';
 import PropTypes from 'prop-types'; 
 import dagre from 'dagre'; 
+import { NodeResizer } from '@reactflow/node-resizer';
+import '@reactflow/node-resizer/dist/style.css';
 import 'reactflow/dist/style.css';
 
-const mockSavedViews = [
-  { id: 'v1', name: 'Core Routing View', zones: ['zone-1', 'zone-4'] },
-  { id: 'v2', name: 'Floor 1 Access', zones: ['zone-1', 'zone-2'] }
-];
-
+// ==========================================
+// --- CUSTOM NODE: DEVICES ---
+// ==========================================
 const CustomDeviceNode = ({ data }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imgError, setImgError] = useState(false); 
   const [telemetry, setTelemetry] = useState({ cpu: 'Fetching...', memory: 'Fetching...', uptime: 'Fetching...' });
   const [hasFetched, setHasFetched] = useState(false);
+  
   const isGhost = data.status === 'unmanaged';
   const isOnline = data.status === 'online';
   const borderColor = isGhost ? '#555' : (isOnline ? '#4caf50' : '#f44336');
@@ -55,8 +56,9 @@ const CustomDeviceNode = ({ data }) => {
 };
 CustomDeviceNode.propTypes = { data: PropTypes.object.isRequired };
 
-import { NodeResizer } from '@reactflow/node-resizer';
-import '@reactflow/node-resizer/dist/style.css';
+// ==========================================
+// --- CUSTOM NODE: ZONES ---
+// ==========================================
 const CustomZoneNode = ({ data, selected }) => {
   return (
     <>
@@ -68,6 +70,9 @@ const CustomZoneNode = ({ data, selected }) => {
   );
 };
 
+// ==========================================
+// --- CUSTOM EDGE: CABLES ---
+// ==========================================
 const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data }) => {
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   let shouldFlip = (sourceX > targetX) || (sourceX === targetX && sourceY > targetY);
@@ -83,7 +88,10 @@ const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
 };
 CustomEdge.propTypes = { id: PropTypes.string, sourceX: PropTypes.number, sourceY: PropTypes.number, targetX: PropTypes.number, targetY: PropTypes.number, sourcePosition: PropTypes.string, targetPosition: PropTypes.string, style: PropTypes.object, markerEnd: PropTypes.string, data: PropTypes.object };
 
+
+// ==========================================
 // --- MAIN TOPOLOGY CANVAS ENGINE ---
+// ==========================================
 export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus, orgData }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -96,21 +104,38 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
   const [showOrgSidebar, setShowOrgSidebar] = useState(true);
   
-  // Default: Show all zones present in the orgData payload
-  const [selectedZones, setSelectedZones] = useState(() => orgData.flatMap(b => b.floors.flatMap(f => f.zones.map(z => z.id)))); 
-  const [activeViewId, setActiveViewId] = useState(null);
+  const [savedViews, setSavedViews] = useState([]);
+  const [activeView, setActiveView] = useState(null);
   const [newViewName, setNewViewName] = useState('');
+  const [selectedZones, setSelectedZones] = useState([]); 
 
   const nodeTypes = useMemo(() => ({ customDevice: CustomDeviceNode, customZone: CustomZoneNode }), []);
   const edgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []); 
 
+  // Safely initialize selected zones on first load
+  useEffect(() => {
+    if (orgData.length > 0 && selectedZones.length === 0 && !activeView) {
+      const allZones = orgData.flatMap(b => b.floors.flatMap(f => f.zones.map(z => z.id)));
+      setSelectedZones([...allZones, -1]); // -1 represents 'Unassigned'
+    }
+  }, [orgData, selectedZones.length, activeView]);
+
+  // Load Saved Views from Backend
+  useEffect(() => {
+    fetch('http://127.0.0.1:8000/topology/views', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    .then(res => res.ok ? res.json() : [])
+    .then(data => setSavedViews(data))
+    .catch(err => console.error("Failed to load views:", err));
+  }, []);
+
+  // --- CASCADING CHECKBOX LOGIC ---
   const handleZoneToggle = (zoneId) => {
-    setActiveViewId(null); 
+    setActiveView(null); 
     setSelectedZones(prev => prev.includes(zoneId) ? prev.filter(z => z !== zoneId) : [...prev, zoneId]);
   };
 
   const handleFloorToggle = (floor) => {
-    setActiveViewId(null);
+    setActiveView(null);
     const floorZoneIds = floor.zones.map(z => z.id);
     const allChecked = floorZoneIds.every(id => selectedZones.includes(id));
     if (allChecked) { setSelectedZones(prev => prev.filter(id => !floorZoneIds.includes(id))); } 
@@ -118,18 +143,53 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   };
 
   const handleBuildingToggle = (bldg) => {
-    setActiveViewId(null);
+    setActiveView(null);
     const bldgZoneIds = bldg.floors.flatMap(f => f.zones.map(z => z.id));
     const allChecked = bldgZoneIds.every(id => selectedZones.includes(id));
     if (allChecked) { setSelectedZones(prev => prev.filter(id => !bldgZoneIds.includes(id))); } 
     else { setSelectedZones(prev => [...new Set([...prev, ...bldgZoneIds])]); }
   };
 
-  const handleLoadView = (view) => {
-    setActiveViewId(view.id);
-    setSelectedZones(view.zones);
+  // --- VIEW MANAGEMENT ---
+  const handleSaveView = () => {
+    if (!newViewName) return alert("Please enter a name for your view.");
+    
+    const currentCoords = {};
+    nodes.filter(n => n.type === 'customDevice').forEach(n => {
+      currentCoords[n.id] = { x: n.position.x, y: n.position.y };
+    });
+
+    const payload = { name: newViewName, zone_ids: selectedZones, coordinates: currentCoords };
+
+    fetch('http://127.0.0.1:8000/topology/views', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      body: JSON.stringify(payload)
+    })
+    .then(async res => { if (!res.ok) throw new Error(await res.text()); return res.json(); })
+    .then(newView => {
+      setSavedViews([...savedViews, newView]);
+      setNewViewName('');
+      setActiveView(newView);
+    })
+    .catch(err => alert(`Failed to save view: ${err}`));
   };
 
+  const handleDeleteView = (viewId) => {
+    if (!window.confirm("Delete this saved view?")) return;
+    fetch(`http://127.0.0.1:8000/topology/views/${viewId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    .then(() => {
+      setSavedViews(savedViews.filter(v => v.id !== viewId));
+      if (activeView?.id === viewId) setActiveView(null);
+    });
+  };
+
+  const handleLoadView = (view) => {
+    setActiveView(view);
+    setSelectedZones(view.zone_ids);
+  };
+
+  // --- MAP RENDERER LOOP ---
   useEffect(() => {
     fetch('http://127.0.0.1:8000/topology/edges', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => res.ok ? res.json() : [])
@@ -137,12 +197,12 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       let savedGhostPositions = {};
       try { savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}'); } catch (e) {}
 
-      // 1. EXTRACT UNIQUE ZONES TO CREATE BACKGROUND BOXES
-      const visibleZoneIds = [...new Set(devices.map(d => d.floor || "zone-1"))].filter(z => selectedZones.includes(z));
+      // 1. CREATE VISUAL ZONE BOXES
+      const visibleZoneIds = [...new Set(devices.map(d => d.zone_id || -1))].filter(z => selectedZones.includes(z));
       let currentNodes = [];
 
       visibleZoneIds.forEach((zoneId, index) => {
-        let zName = zoneId;
+        let zName = zoneId === -1 ? "Unassigned Devices" : "Unknown Zone";
         orgData.forEach(b => b.floors.forEach(f => f.zones.forEach(z => { if(z.id === zoneId) zName = z.name; })));
 
         currentNodes.push({
@@ -153,13 +213,17 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         });
       });
 
-      // 2. MAP THE DEVICES AND ATTACH TO PARENT ZONES
+      // 2. MOUNT DEVICES INSIDE ZONES
       devices.forEach((dev, index) => {
-        const devZone = dev.floor || 'zone-1';
+        const devZone = dev.zone_id || -1;
         if (selectedZones.includes(devZone)) {
+          
+          let spawnX = activeView?.coordinates?.[dev.hostname]?.x ?? dev.pos_x ?? 50;
+          let spawnY = activeView?.coordinates?.[dev.hostname]?.y ?? dev.pos_y ?? 80;
+
           currentNodes.push({
             id: dev.hostname, type: 'customDevice', parentNode: `box-${devZone}`, 
-            position: { x: dev.pos_x ?? 50, y: dev.pos_y ?? 80 },
+            position: { x: spawnX, y: spawnY },
             data: { label: dev.hostname, ip: dev.ip_address, status: dev.status, latency: dev.latency, device_type: dev.device_type, os: dev.os_type, full_device: dev },
           });
         }
@@ -190,11 +254,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         }
       });
 
-      setNodes(prev => { return currentNodes.map(cn => { const existing = prev.find(p => p.id === cn.id); if (existing && existing.type !== 'customZone') cn.position = existing.position; return cn; }); });
+      setNodes(prev => { return currentNodes.map(cn => { const existing = prev.find(p => p.id === cn.id); if (existing && existing.type !== 'customZone' && !activeView) cn.position = existing.position; return cn; }); });
       setEdges(formattedEdges);
     })
     .catch(err => console.error("Failed to load edges:", err));
-  }, [devices, selectedZones, orgData]);
+  }, [devices, selectedZones, orgData, activeView]);
 
   const onLayout = useCallback(() => {
     const dagreGraph = new dagre.graphlib.Graph();
@@ -236,7 +300,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
     fetch('http://127.0.0.1:8000/topology/update-coordinates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify(coordinates) })
     .then(async res => { if (!res.ok) { const err = await res.json(); throw new Error(err.detail); } return res.json(); })
-    .then(() => { setIsSaving(false); alert("✅ Map layout saved!"); if (fetchNetworkStatus) fetchNetworkStatus(); })
+    .then(() => { setIsSaving(false); alert("✅ Global Map Layout saved successfully!"); if (fetchNetworkStatus) fetchNetworkStatus(); })
     .catch(err => { console.error(err); alert(`❌ Failed: ${err.message}`); setIsSaving(false); });
   };
 
@@ -248,15 +312,24 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 120px)', position: 'relative', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
       
+      {/* --- LEFT SIDEBAR FOR ORGANIZATION & VIEWS --- */}
       {showOrgSidebar && (
         <div style={{ width: '320px', backgroundColor: '#252526', borderRight: '1px solid #333', display: 'flex', flexDirection: 'column', zIndex: 5 }}>
-          
           <div style={{ padding: '20px', flex: 1, overflowY: 'auto' }}>
+            
             <h4 style={{ margin: '0 0 10px 0', color: '#fff', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Saved Views</h4>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '25px' }}>
-              {mockSavedViews.map(view => (
-                <button key={view.id} onClick={() => handleLoadView(view)} style={{ padding: '10px', backgroundColor: activeViewId === view.id ? '#007acc' : '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer', textAlign: 'left', fontWeight: 'bold' }}>📺 {view.name}</button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '15px' }}>
+              {savedViews.map(view => (
+                <div key={view.id} style={{ display: 'flex', gap: '5px' }}>
+                  <button onClick={() => handleLoadView(view)} style={{ flex: 1, padding: '10px', backgroundColor: activeView?.id === view.id ? '#007acc' : '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px', cursor: 'pointer', textAlign: 'left', fontWeight: 'bold' }}>📺 {view.name}</button>
+                  <button onClick={() => handleDeleteView(view.id)} style={{ padding: '10px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer' }}>✖</button>
+                </div>
               ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: '5px', marginBottom: '25px' }}>
+              <input type="text" placeholder="Save current layout as..." value={newViewName} onChange={(e) => setNewViewName(e.target.value)} style={{ flex: 1, padding: '8px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }} />
+              <button onClick={handleSaveView} style={{ padding: '8px 12px', backgroundColor: '#4caf50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save</button>
             </div>
 
             <h4 style={{ margin: '0 0 15px 0', color: '#fff', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Organization Tree</h4>
@@ -283,7 +356,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
                         </label>
                         
                         <div style={{ paddingLeft: '20px', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                          {floor.zones.length === 0 && <span style={{ color: '#666', fontSize: '0.8rem', fontStyle: 'italic' }}>No zones</span>}
+                          {floor.zones.length === 0 && <span style={{ color: '#666', fontSize: '0.8rem', fontStyle: 'italic' }}>No zones assigned</span>}
                           {floor.zones.map(zone => (
                             <label key={zone.id} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: selectedZones.includes(zone.id) ? '#fff' : '#888', fontSize: '0.85rem' }}>
                               <input type="checkbox" checked={selectedZones.includes(zone.id)} onChange={() => handleZoneToggle(zone.id)} style={{ marginRight: '8px' }} /> {zone.name}
@@ -296,6 +369,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
                 </div>
               )
             })}
+
+            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', color: '#ccc', fontWeight: 'bold', marginTop: '20px' }}>
+              <input type="checkbox" checked={selectedZones.includes(-1)} onChange={() => handleZoneToggle(-1)} style={{ marginRight: '10px' }} /> ❓ Unassigned Devices
+            </label>
+
           </div>
         </div>
       )}
@@ -314,7 +392,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         <div style={{ position: 'absolute', top: '20px', right: (selectedDevice || selectedEdge) ? '340px' : '20px', transition: 'right 0.3s ease', zIndex: 10, display: 'flex', gap: '10px' }}>
           <button onClick={onLayout} style={{ padding: '10px 20px', backgroundColor: '#e6a23c', color: '#000', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>✨ Auto-Layout</button>
           <button onClick={handleDiscovery} disabled={isDiscovering || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isDiscovering ? '#555' : '#4caf50', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>{isDiscovering ? 'Scanning...' : '🔍 Run Auto-Discovery'}</button>
-          <button onClick={saveLayout} disabled={isSaving || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isSaving ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>{isSaving ? 'Saving...' : '💾 Save Map Layout'}</button>
+          <button onClick={saveLayout} disabled={isSaving || userRole !== 'admin'} style={{ padding: '10px 20px', backgroundColor: isSaving ? '#555' : '#007acc', color: 'white', border: 'none', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>{isSaving ? 'Saving...' : '💾 Save Global Layout'}</button>
         </div>
       </div>
 

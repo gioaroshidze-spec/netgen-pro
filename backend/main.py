@@ -7,7 +7,7 @@ from database import engine, SessionLocal
 from contextlib import asynccontextmanager
 
 # Import our routers and scheduler
-from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology
+from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology, organization
 from scheduler_engine import start_scheduler, scheduler # <-- NEW
 
 # Initialize Database Engine
@@ -57,7 +57,7 @@ app.include_router(logs.router)
 app.include_router(templates.router)
 app.include_router(cli.router)
 app.include_router(topology.router)
-
+app.include_router(organization.router)
 # Basic Health Check
 @app.get("/")
 def health_check():

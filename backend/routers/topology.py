@@ -354,3 +354,34 @@ def execute_port_action(request: PortOperationRequest, db: Session = Depends(get
     except Exception as e:
         log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Port Action Failed", "port": request.port, "error": str(e)})
         raise HTTPException(status_code=500, detail=f"Port action failed: {str(e)}")
+    
+# Inject these endpoints into your routers/topology.py file
+
+@router.get("/topology/views", response_model=List[schemas.SavedViewResponse])
+def get_saved_views(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Returns all topology views saved by the current user."""
+    return db.query(models.SavedTopologyView).filter(models.SavedTopologyView.user_id == current_user.id).all()
+
+@router.post("/topology/views", response_model=schemas.SavedViewResponse)
+def save_topology_view(view: schemas.SavedViewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Creates a new saved view with decoupled X/Y coordinates."""
+    db_view = models.SavedTopologyView(
+        name=view.name,
+        user_id=current_user.id,
+        zone_ids=view.zone_ids,
+        coordinates=view.coordinates
+    )
+    db.add(db_view)
+    db.commit()
+    db.refresh(db_view)
+    return db_view
+
+@router.delete("/topology/views/{view_id}")
+def delete_topology_view(view_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """Deletes a custom view."""
+    db_view = db.query(models.SavedTopologyView).filter(models.SavedTopologyView.id == view_id, models.SavedTopologyView.user_id == current_user.id).first()
+    if not db_view:
+        raise HTTPException(status_code=404, detail="View not found.")
+    db.delete(db_view)
+    db.commit()
+    return {"message": "View deleted successfully."}

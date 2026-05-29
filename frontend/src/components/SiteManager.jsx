@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function SiteManager({ orgData, setOrgData }) {
+export default function SiteManager({ orgData, fetchOrgData }) {
   const [selectedBldg, setSelectedBldg] = useState(null);
   const [selectedFloor, setSelectedFloor] = useState(null);
 
@@ -8,49 +8,44 @@ export default function SiteManager({ orgData, setOrgData }) {
   const [newFloorName, setNewFloorName] = useState('');
   const [newZoneName, setNewZoneName] = useState('');
 
+  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
+
   const addBuilding = () => {
     if (!newBldgName) return;
-    const newId = `bldg-${Date.now()}`;
-    setOrgData([...orgData, { id: newId, name: newBldgName, floors: [] }]);
-    setNewBldgName('');
+    fetch('http://127.0.0.1:8000/organization/building', { method: 'POST', headers, body: JSON.stringify({ name: newBldgName }) })
+    .then(() => { setNewBldgName(''); fetchOrgData(); });
   };
 
   const addFloor = () => {
     if (!newFloorName || !selectedBldg) return;
-    const newId = `flr-${Date.now()}`;
-    setOrgData(orgData.map(b => b.id === selectedBldg.id ? { ...b, floors: [...b.floors, { id: newId, name: newFloorName, zones: [] }] } : b));
-    setNewFloorName('');
+    fetch('http://127.0.0.1:8000/organization/floor', { method: 'POST', headers, body: JSON.stringify({ name: newFloorName, building_id: selectedBldg.id }) })
+    .then(() => { setNewFloorName(''); fetchOrgData(); });
   };
 
   const addZone = () => {
     if (!newZoneName || !selectedFloor) return;
-    const newId = `zone-${Date.now()}`;
-    setOrgData(orgData.map(b => ({
-      ...b, floors: b.floors.map(f => f.id === selectedFloor.id ? { ...f, zones: [...f.zones, { id: newId, name: newZoneName }] } : f)
-    })));
-    setNewZoneName('');
+    fetch('http://127.0.0.1:8000/organization/zone', { method: 'POST', headers, body: JSON.stringify({ name: newZoneName, floor_id: selectedFloor.id }) })
+    .then(() => { setNewZoneName(''); fetchOrgData(); });
   };
 
   const deleteBuilding = (id) => {
     if(!window.confirm("Delete this building and all its contents?")) return;
-    setOrgData(orgData.filter(b => b.id !== id));
-    if (selectedBldg?.id === id) { setSelectedBldg(null); setSelectedFloor(null); }
+    fetch(`http://127.0.0.1:8000/organization/building/${id}`, { method: 'DELETE', headers })
+    .then(() => { if (selectedBldg?.id === id) { setSelectedBldg(null); setSelectedFloor(null); } fetchOrgData(); });
   };
 
-  const deleteFloor = (bldgId, floorId) => {
-    setOrgData(orgData.map(b => b.id === bldgId ? { ...b, floors: b.floors.filter(f => f.id !== floorId) } : b));
-    if (selectedFloor?.id === floorId) setSelectedFloor(null);
+  const deleteFloor = (id) => {
+    fetch(`http://127.0.0.1:8000/organization/floor/${id}`, { method: 'DELETE', headers })
+    .then(() => { if (selectedFloor?.id === id) setSelectedFloor(null); fetchOrgData(); });
   };
 
-  const deleteZone = (bldgId, floorId, zoneId) => {
-    setOrgData(orgData.map(b => b.id === bldgId ? {
-      ...b, floors: b.floors.map(f => f.id === floorId ? { ...f, zones: f.zones.filter(z => z.id !== zoneId) } : f)
-    } : b));
+  const deleteZone = (id) => {
+    fetch(`http://127.0.0.1:8000/organization/zone/${id}`, { method: 'DELETE', headers })
+    .then(() => fetchOrgData());
   };
 
   return (
     <div style={{ display: 'flex', gap: '20px', height: '600px' }}>
-      
       {/* BUILDINGS COLUMN */}
       <div style={{ flex: 1, backgroundColor: '#252526', borderRadius: '8px', border: '1px solid #333', display: 'flex', flexDirection: 'column' }}>
         <h3 style={{ margin: 0, padding: '15px', backgroundColor: '#1e1e1e', borderBottom: '1px solid #444', color: '#007acc' }}>🏢 Buildings</h3>
@@ -79,7 +74,7 @@ export default function SiteManager({ orgData, setOrgData }) {
           {selectedBldg && selectedBldg.floors.map(f => (
             <div key={f.id} onClick={() => setSelectedFloor(f)} style={{ padding: '12px', backgroundColor: selectedFloor?.id === f.id ? '#e6a23c33' : '#1e1e1e', border: selectedFloor?.id === f.id ? '1px solid #e6a23c' : '1px solid #333', borderRadius: '4px', marginBottom: '8px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ fontWeight: 'bold', color: selectedFloor?.id === f.id ? '#fff' : '#aaa' }}>{f.name}</span>
-              <button onClick={(e) => { e.stopPropagation(); deleteFloor(selectedBldg.id, f.id); }} style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer' }}>✖</button>
+              <button onClick={(e) => { e.stopPropagation(); deleteFloor(f.id); }} style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer' }}>✖</button>
             </div>
           ))}
         </div>
@@ -96,12 +91,11 @@ export default function SiteManager({ orgData, setOrgData }) {
           {selectedFloor && selectedFloor.zones.map(z => (
             <div key={z.id} style={{ padding: '12px', backgroundColor: '#1e1e1e', border: '1px solid #333', borderRadius: '4px', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: '#ccc' }}>{z.name}</span>
-              <button onClick={() => deleteZone(selectedBldg.id, selectedFloor.id, z.id)} style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer' }}>✖</button>
+              <button onClick={() => deleteZone(z.id)} style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer' }}>✖</button>
             </div>
           ))}
         </div>
       </div>
-
     </div>
   );
 }
