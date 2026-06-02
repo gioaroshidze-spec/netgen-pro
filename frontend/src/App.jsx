@@ -1,264 +1,250 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react'
+import Inventory from './components/Inventory'
+import Compare from './components/Compare'
+import Maintenance from './components/Maintenance'
+import Configuration from './components/Configuration'
+import EventLogs from './components/EventLogs'
+import Templates from './components/Templates'
+import CLI from './components/CLI'
+import Login from './components/Login'
+import Users from './components/Users'
+import Dashboard from './components/Dashboard'
+import Topology from './components/Topology' // <-- RESTORED TOPOLOGY IMPORT
 
-// ==========================================
-// --- COMPONENT IMPORTS ---
-// ==========================================
-import Inventory from './components/Inventory';
-import Topology from './components/Topology';
-import Dashboard from './components/Dashboard';
-import Configuration from './components/Configuration';
-import Maintenance from './components/Maintenance';
-import Compare from './components/Compare';
-import Templates from './components/Templates';
-import CLI from './components/CLI';
-import EventLogs from './components/EventLogs';
-import Users from './components/Users';
+// --- CENTRALIZED API URL ---
+const MAP_URL = 'http://127.0.0.1:8000/network-map/'
 
-export default function App() {
-  // ==========================================
-  // 1. GLOBAL STATE DEFINITIONS
-  // ==========================================
-  const [isAuthenticated, setIsAuthenticated] = useState(!!localStorage.getItem('token'));
-  const [userRole, setUserRole] = useState(localStorage.getItem('role') || 'admin');
-  const [activeTab, setActiveTab] = useState('Dashboard'); 
-  
-  // Data Sources
-  const [devices, setDevices] = useState([]);
-  const [orgData, setOrgData] = useState([]);
-  const [archiveFiles, setArchiveFiles] = useState({});
+function App() {
+  // --- AUTHENTICATION & ROLE STATE ---
+  const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
+  const userRole = localStorage.getItem('role') || 'viewer'
+  const currentUsername = localStorage.getItem('username')
 
-  // Device Selection Sidebar States (Needed for Config, Maintenance, CLI modules)
-  const [selectedSwitches, setSelectedSwitches] = useState([]);
-  const [selectedRouters, setSelectedRouters] = useState([]);
-  const [loadedTemplate, setLoadedTemplate] = useState(null);
-
-  // Login Form States
-  const [loginUser, setLoginUser] = useState('admin');
-  const [loginPass, setLoginPass] = useState('');
-  const [loginError, setLoginError] = useState('');
-
-  // ==========================================
-  // 2. DATA FETCH ENGINE (CALLBACKS)
-  // ==========================================
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('role');
-    setIsAuthenticated(false);
-    setDevices([]);
-    setOrgData([]);
-    setArchiveFiles({});
-    setSelectedSwitches([]);
-    setSelectedRouters([]);
-    setLoadedTemplate(null);
-  };
-
-  const fetchNetworkStatus = useCallback(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-    
-    fetch('http://127.0.0.1:8000/network-map/', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    .then(res => res.ok ? res.json() : [])
-    .then(data => setDevices(data))
-    .catch(err => console.error("Failed to fetch devices:", err));
-  }, []);
-
-  const fetchOrgData = useCallback(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-
-    fetch('http://127.0.0.1:8000/organization/hierarchy', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    .then(res => res.ok ? res.json() : [])
-    .then(data => setOrgData(data))
-    .catch(err => console.error("Failed to load org tree:", err));
-  }, []);
-
-  const fetchArchiveFiles = useCallback(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-
-    fetch('http://127.0.0.1:8000/archive/files', {
-      headers: { 'Authorization': `Bearer ${token}` }
-    })
-    .then(res => res.ok ? res.json() : {})
-    .then(data => setArchiveFiles(data))
-    .catch(err => console.error("Failed to load archive configs:", err));
-  }, []);
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoginError('');
-    const formData = new URLSearchParams();
-    formData.append('username', loginUser);
-    formData.append('password', loginPass);
-
-    try {
-      const res = await fetch('http://127.0.0.1:8000/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formData
-      });
-      if (!res.ok) throw new Error("Invalid credentials");
-      const data = await res.json();
-      
-      localStorage.setItem('token', data.access_token);
-      localStorage.setItem('role', 'admin'); 
-      setUserRole('admin');
-      setIsAuthenticated(true);
-    } catch (err) {
-      setLoginError("Login Failed. Verify backend /token endpoint and default credentials.");
-    }
-  };
-
-  // ==========================================
-  // 3. BACKGROUND SYNCHRONIZATION
-  // ==========================================
+  // --- STANDARD APP STATE ---
+  const [activeTab, setActiveTab] = useState(() => {
+    return localStorage.getItem('vnmsActiveTab') || 'Dashboard' 
+  })
   useEffect(() => {
     if (isAuthenticated) {
-      fetchNetworkStatus();
-      fetchOrgData(); 
-      fetchArchiveFiles();
-      
-      const intervalId = setInterval(() => {
-        fetchNetworkStatus();
-        fetchArchiveFiles();
-      }, 30000);
-      return () => clearInterval(intervalId);
+      localStorage.setItem('vnmsActiveTab', activeTab)
     }
-  }, [isAuthenticated, fetchNetworkStatus, fetchOrgData, fetchArchiveFiles]);
-
-  // Handle sidebar checkbox toggle
-  const handleDeviceToggle = (hostname, type) => {
-    if (type === 'switch') {
-      setSelectedSwitches(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname]);
-    } else {
-      setSelectedRouters(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname]);
-    }
-  };
-
-  // ==========================================
-  // 4. ARCHITECTURAL RENDERING
-  // ==========================================
+  }, [activeTab, isAuthenticated])
   
-  if (!isAuthenticated) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#1e1e1e', color: '#fff' }}>
-        <form onSubmit={handleLogin} style={{ textAlign: 'center', padding: '40px', backgroundColor: '#252526', borderRadius: '8px', border: '1px solid #333', width: '350px' }}>
-          <h2 style={{ color: '#007acc', marginBottom: '20px' }}>VNMS Login</h2>
-          {loginError && <div style={{ color: '#f44336', marginBottom: '15px', fontSize: '0.9rem' }}>{loginError}</div>}
-          <input type="text" placeholder="Username" value={loginUser} onChange={e => setLoginUser(e.target.value)} required style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }} />
-          <input type="password" placeholder="Password" value={loginPass} onChange={e => setLoginPass(e.target.value)} required style={{ width: '100%', padding: '10px', marginBottom: '20px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }} />
-          <button type="submit" style={{ width: '100%', padding: '12px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Secure Login</button>
-        </form>
-      </div>
-    );
+  const [loadedTemplate, setLoadedTemplate] = useState(null)
+  const [devices, setDevices] = useState([])
+  const [orgData, setOrgData] = useState([]) // <-- NEW: ORG TREE STATE
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [archiveFiles, setArchiveFiles] = useState({})
+  
+  // Configuration Target States
+  const [selectedSwitches, setSelectedSwitches] = useState([])
+  const [selectedRouters, setSelectedRouters] = useState([])
+  
+  // Sidebar Search States
+  const [connectionSearch, setConnectionSearch] = useState('')
+  const [dropdownSearch, setDropdownSearch] = useState('')
+
+  // --- DYNAMIC TABS BASED ON ROLE ---
+  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs', 'Topology'] // <-- ADDED TOPOLOGY TAB
+  
+  if (currentUsername === 'admin') {
+    TABS.push('Users')
   }
 
-  const tabs = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs', 'Topology', 'Users'];
+  // --- LOGOUT ROUTINE ---
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    localStorage.removeItem('username')
+    localStorage.removeItem('role')
+    setIsAuthenticated(false)
+  }
 
-  // Condition to check if left operations sidebar should show up
-  const showOperationsSidebar = ['Configuration', 'Maintenance', 'CLI'].includes(activeTab);
+// --- DATA FETCHING ---
+  const fetchNetworkStatus = () => {
+    setIsRefreshing(true)
+    fetch(MAP_URL, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
+    })
+      .then(res => {
+        if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
+        if (!res.ok) throw new Error("Failed to fetch network map");
+        return res.json();
+      })
+      .then(data => { setDevices(data); setIsRefreshing(false) })
+      .catch(err => { console.error(err); setIsRefreshing(false) })
+  }
+
+  // <-- NEW: FETCH ORG DATA -->
+  const fetchOrgData = () => {
+    fetch('http://127.0.0.1:8000/organization/hierarchy', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+    .then(res => {
+      if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
+      if (!res.ok) throw new Error("Failed to fetch org tree");
+      return res.json();
+    })
+    .then(data => setOrgData(data))
+    .catch(err => console.error(err))
+  }
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    fetchNetworkStatus()
+    fetchOrgData() 
+    
+    fetch('http://127.0.0.1:8000/archive/files', {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
+    })
+      .then(res => {
+        if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
+        if (!res.ok) throw new Error("Failed to fetch archives");
+        return res.json();
+      })
+      .then(data => setArchiveFiles(data))
+      .catch(err => console.error("Failed to load archive:", err))
+
+    const intervalId = setInterval(() => {
+      fetchNetworkStatus();
+      fetchArchiveFiles();
+    }, 30000)
+    return () => clearInterval(intervalId)
+  }, [isAuthenticated])
+
+  // --- SORTING & FILTERING LOGIC FOR SIDEBAR ---
+  const sortConnections = (a, b) => {
+    if (a.status === 'online' && b.status !== 'online') return -1;
+    if (a.status !== 'online' && b.status === 'online') return 1;
+    return a.hostname.localeCompare(b.hostname, undefined, { numeric: true });
+  };
+  const sortTargets = (a, b) => a.hostname.localeCompare(b.hostname, undefined, { numeric: true });
+
+  const allSwitches = devices.filter(d => d.device_type !== 'router')
+  const allRouters = devices.filter(d => d.device_type === 'router')
+
+  const switchConnections = allSwitches.filter(d => d.hostname.toLowerCase().includes(connectionSearch.toLowerCase())).sort(sortConnections)
+  const routerConnections = allRouters.filter(d => d.hostname.toLowerCase().includes(connectionSearch.toLowerCase())).sort(sortConnections)
+  
+  const maxConnectionsToShow = activeTab === 'Configuration' ? 3 : 100
+
+  const toggleSelection = (hostname, list, setList) => {
+    setList(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname])
+  }
+
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
+  }
 
   return (
-    <div style={{ backgroundColor: '#1e1e1e', color: '#fff', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#1e1e1e', color: '#fff' }}>
       
-      {/* TOP NAVIGATION BAR */}
-      <nav style={{ display: 'flex', backgroundColor: '#252526', padding: '0 20px', borderBottom: '1px solid #333', alignItems: 'center', overflowX: 'auto', zIndex: 10 }}>
-        <div style={{ fontWeight: 'bold', fontSize: '1.2rem', color: '#007acc', marginRight: '30px' }}>VNMS Pro</div>
-        <div style={{ display: 'flex', flex: 1 }}>
-          {tabs.map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)} style={{ padding: '15px 20px', backgroundColor: 'transparent', color: activeTab === tab ? '#fff' : '#aaa', border: 'none', borderBottom: activeTab === tab ? '3px solid #007acc' : '3px solid transparent', cursor: 'pointer', fontWeight: activeTab === tab ? 'bold' : 'normal', whiteSpace: 'nowrap' }}>{tab}</button>
-          ))}
+      {/* ================= TOP NAVIGATION TABS ================= */}
+      <div style={{ display: 'flex', backgroundColor: '#252526', borderBottom: '1px solid #333', padding: '0 20px', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <h2 onClick={() => setActiveTab('Configuration')} style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}>
+            VNMS
+          </h2>
+          <div style={{ display: 'flex', gap: '2px' }}>
+            {TABS.map(tab => (
+              <button 
+                key={tab} onClick={() => setActiveTab(tab)}
+                style={{ padding: '15px 25px', backgroundColor: activeTab === tab ? '#1e1e1e' : 'transparent', color: activeTab === tab ? '#fff' : '#aaa', border: 'none', borderTop: activeTab === tab ? '3px solid #007acc' : '3px solid transparent', cursor: 'pointer', fontWeight: activeTab === tab ? 'bold' : 'normal', fontSize: '1rem' }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px', marginLeft: '20px' }}>
-          <span style={{ fontSize: '0.85rem', color: '#aaa' }}>Logged in as: <strong style={{ color: '#fff' }}>Admin</strong> <span style={{ color: '#4caf50', marginLeft: '5px', fontSize: '0.7rem' }}>{userRole.toUpperCase()}</span></span>
-          <button onClick={handleLogout} style={{ padding: '6px 12px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>Logout</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <span style={{ fontSize: '0.9rem', color: '#aaa' }}>
+            Logged in as: <strong style={{ color: '#fff', textTransform: 'capitalize' }}>{localStorage.getItem('username')}</strong> 
+            <span style={{ marginLeft: '8px', padding: '2px 6px', backgroundColor: userRole === 'admin' ? '#4caf5022' : '#007acc22', color: userRole === 'admin' ? '#4caf50' : '#007acc', borderRadius: '4px', fontSize: '0.75rem', textTransform: 'uppercase' }}>
+              {userRole}
+            </span>
+          </span>
+          <button onClick={handleLogout} style={{ padding: '6px 12px', backgroundColor: 'transparent', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+            Logout
+          </button>
         </div>
-      </nav>
+      </div>
 
-      {/* BODY INTERACTION FRAME */}
-      <div style={{ display: 'flex', flex: 1, height: 'calc(100vh - 50px)', position: 'relative' }}>
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         
-        {/* LEFT NODE ASSIGNMENT SIDEBAR */}
-        {showOperationsSidebar && (
-          <aside style={{ width: '260px', backgroundColor: '#252526', borderRight: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
-            <h3 style={{ margin: '0 0 15px 0', fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '1px', color: '#888' }}>Target Selector</h3>
-            
-            <div style={{ marginBottom: '20px' }}>
-              <strong style={{ color: '#007acc', display: 'block', marginBottom: '8px', fontSize: '0.9rem' }}>🔌 Switches</strong>
-              {devices.filter(d => d.device_type === 'switch').map(dev => (
-                <label key={dev.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', color: '#ccc', fontSize: '0.85rem' }}>
-                  <input type="checkbox" checked={selectedSwitches.includes(dev.hostname)} onChange={() => handleDeviceToggle(dev.hostname, 'switch')} />
-                  <span style={{ color: dev.status === 'online' ? '#4caf50' : '#f44336' }}>●</span> {dev.hostname}
-                </label>
-              ))}
+        {/* ================= DYNAMIC SIDEBAR ================= */}
+        <div style={{ width: '320px', backgroundColor: '#252526', padding: '1.5rem', borderRight: '1px solid #333', overflowY: 'auto', position: 'sticky', top: '0', height: '100vh'}}>
+          <div style={{ marginBottom: '30px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h3 style={{ margin: 0 }}>Connections</h3>
+              <button onClick={fetchNetworkStatus} style={{ background: 'none', border: 'none', color: '#007acc', cursor: 'pointer' }}>{isRefreshing ? '↻...' : '↻ Refresh'}</button>
             </div>
+            <input type="text" placeholder="Search connections..." value={connectionSearch} onChange={(e) => setConnectionSearch(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '15px', backgroundColor: '#333', border: '1px solid #444', color: 'white', borderRadius: '4px' }} />
 
-            <div>
-              <strong style={{ color: '#e6a23c', display: 'block', marginBottom: '8px', fontSize: '0.9rem' }}>🛰️ Routers</strong>
-              {devices.filter(d => d.device_type === 'router').map(dev => (
-                <label key={dev.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0', cursor: 'pointer', color: '#ccc', fontSize: '0.85rem' }}>
-                  <input type="checkbox" checked={selectedRouters.includes(dev.hostname)} onChange={() => handleDeviceToggle(dev.hostname, 'router')} />
-                  <span style={{ color: dev.status === 'online' ? '#4caf50' : '#f44336' }}>●</span> {dev.hostname}
-                </label>
-              ))}
-            </div>
-          </aside>
-        )}
+            <h4 style={{ color: '#aaa', margin: '5px 0' }}>Switches</h4>
+            {switchConnections.slice(0, maxConnectionsToShow).map(device => (
+              <div key={device.id} style={{ display: 'flex', alignItems: 'center', padding: '8px', backgroundColor: '#2d2d2d', marginBottom: '5px', borderRadius: '4px' }}>
+                <span style={{ fontSize: '0.9rem', flex: 1 }}>{device.hostname}</span>
+                <span style={{ color: '#888', fontSize: '0.8rem', marginRight: '10px', fontFamily: 'monospace' }}>{device.ip_address}</span>
+                <span style={{ height: '10px', width: '10px', borderRadius: '50%', backgroundColor: device.status === 'online' ? '#4caf50' : '#f44336' }}></span>
+              </div>
+            ))}
+            {switchConnections.length > maxConnectionsToShow && <div style={{ fontSize: '0.8rem', color: '#888', textAlign: 'center' }}>+ {switchConnections.length - maxConnectionsToShow} more...</div>}
 
-        {/* WORKSPACE AREA */}
-        <main style={{ flex: 1, padding: '25px', overflowY: 'auto', backgroundColor: '#1e1e1e' }}>
-          
-          {activeTab === 'Dashboard' && <Dashboard devices={devices} setActiveTab={setActiveTab} userRole={userRole} />}
-          
+            <h4 style={{ color: '#aaa', margin: '15px 0 5px 0' }}>Routers</h4>
+            {routerConnections.length === 0 ? <div style={{ fontSize: '0.8rem', color: '#666', padding: '8px' }}>No routers configured</div> : routerConnections.slice(0, maxConnectionsToShow).map(device => (
+              <div key={device.id} style={{ display: 'flex', alignItems: 'center', padding: '8px', backgroundColor: '#2d2d2d', marginBottom: '5px', borderRadius: '4px' }}>
+                <span style={{ fontSize: '0.9rem', flex: 1 }}>{device.hostname}</span>
+                <span style={{ color: '#888', fontSize: '0.8rem', marginRight: '10px', fontFamily: 'monospace' }}>{device.ip_address}</span>
+                <span style={{ height: '10px', width: '10px', borderRadius: '50%', backgroundColor: device.status === 'online' ? '#4caf50' : '#f44336' }}></span>
+              </div>
+            ))}
+            {routerConnections.length > maxConnectionsToShow && <div style={{ fontSize: '0.8rem', color: '#888', textAlign: 'center' }}>+ {routerConnections.length - maxConnectionsToShow} more...</div>}
+          </div>
+
           {activeTab === 'Configuration' && (
-            <Configuration 
-              selectedSwitches={selectedSwitches} 
-              selectedRouters={selectedRouters} 
-              loadedTemplate={loadedTemplate} 
-              setLoadedTemplate={setLoadedTemplate} 
-              userRole={userRole} 
-            />
+            <div style={{ borderTop: '1px solid #444', paddingTop: '20px' }}>
+              <h3 style={{ margin: '0 0 10px 0' }}>Target Devices</h3>
+              <input type="text" placeholder="Search targets..." value={dropdownSearch} onChange={(e) => setDropdownSearch(e.target.value)} style={{ width: '100%', padding: '8px', marginBottom: '15px', backgroundColor: '#333', border: '1px solid #444', color: 'white', borderRadius: '4px' }} />
+              
+              <h4 style={{ color: '#aaa', margin: '5px 0', fontSize: '0.85rem' }}>Select Switches</h4>
+              <div style={{ maxHeight: '120px', overflowY: 'auto', backgroundColor: '#2d2d2d', border: '1px solid #444', borderRadius: '4px', padding: '5px', marginBottom: '15px' }}>
+                {allSwitches.filter(s => s.hostname.toLowerCase().includes(dropdownSearch.toLowerCase())).sort(sortTargets).map(s => (
+                  <label key={s.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', borderRadius: '4px', backgroundColor: selectedSwitches.includes(s.hostname) ? '#007acc44' : 'transparent' }}>
+                    <input type="checkbox" checked={selectedSwitches.includes(s.hostname)} onChange={() => toggleSelection(s.hostname, selectedSwitches, setSelectedSwitches)} style={{ marginRight: '10px', cursor: 'pointer' }} />
+                    <span style={{ fontSize: '0.9rem' }}>{s.hostname}</span>
+                  </label>
+                ))}
+              </div>
+              
+              <h4 style={{ color: '#aaa', margin: '5px 0', fontSize: '0.85rem' }}>Select Routers</h4>
+              <div style={{ maxHeight: '120px', overflowY: 'auto', backgroundColor: '#2d2d2d', border: '1px solid #444', borderRadius: '4px', padding: '5px' }}>
+                {allRouters.filter(r => r.hostname.toLowerCase().includes(dropdownSearch.toLowerCase())).sort(sortTargets).map(r => (
+                  <label key={r.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', borderRadius: '4px', backgroundColor: selectedRouters.includes(r.hostname) ? '#007acc44' : 'transparent' }}>
+                    <input type="checkbox" checked={selectedRouters.includes(r.hostname)} onChange={() => toggleSelection(r.hostname, selectedRouters, setSelectedRouters)} style={{ marginRight: '10px', cursor: 'pointer' }} />
+                    <span style={{ fontSize: '0.9rem' }}>{r.hostname}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
           )}
-          
+        </div>
+
+        {/* ================= MAIN CONTENT AREA ================= */}
+        <div style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
+          {activeTab === 'Dashboard' && <Dashboard devices={devices} setActiveTab={setActiveTab} userRole={userRole} />}
           {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} userRole={userRole} />}
           {activeTab === 'Compare' && <Compare archiveFiles={archiveFiles} />}
-          {activeTab === 'Templates' && <Templates setLoadedTemplate={setLoadedTemplate} setActiveTab={setActiveTab} />}
-          {activeTab === 'CLI' && (
-            <CLI 
-              selectedSwitches={selectedSwitches} 
-              selectedRouters={selectedRouters} 
-              devices={devices} // <-- ADD This exact line
-            />
-          )}
+          {activeTab === 'Templates' && <Templates setActiveTab={setActiveTab} setLoadedTemplate={setLoadedTemplate} />}
+          {activeTab === 'Configuration' && <Configuration selectedSwitches={selectedSwitches} selectedRouters={selectedRouters} loadedTemplate={loadedTemplate} setLoadedTemplate={setLoadedTemplate} userRole={userRole} />}
+          {activeTab === 'CLI' && <CLI devices={devices} />}
+          {activeTab === 'Inventory' && <Inventory devices={devices} fetchNetworkStatus={fetchNetworkStatus} userRole={userRole} orgData={orgData} fetchOrgData={fetchOrgData} />}
           {activeTab === 'Event Logs' && <EventLogs />}
           {activeTab === 'Users' && <Users />}
-          
-          {activeTab === 'Inventory' && (
-            <Inventory 
-              devices={devices} 
-              fetchNetworkStatus={fetchNetworkStatus} 
-              userRole={userRole} 
-              orgData={orgData} 
-              fetchOrgData={fetchOrgData} 
-            />
-          )}
-
-          {activeTab === 'Topology' && (
-            <Topology 
-              devices={devices} 
-              userRole={userRole} 
-              setActiveTab={setActiveTab} 
-              fetchNetworkStatus={fetchNetworkStatus} 
-              orgData={orgData} 
-            />
-          )}
-
-        </main>
+          {activeTab === 'Topology' && <Topology devices={devices} userRole={userRole} setActiveTab={setActiveTab} fetchNetworkStatus={fetchNetworkStatus} orgData={orgData} />}
+        </div>
       </div>
     </div>
-  );
+  )
 }
+
+export default App

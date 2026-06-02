@@ -103,7 +103,7 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
                 "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
                 "device_type": device.device_type, "os_type": device.os_type,
                 "username": device.username, "status": "offline", "latency": "N/A",
-                "pos_x": device.pos_x, "pos_y": device.pos_y, "floor": device.floor
+                "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id
             }
         else:
             match = re.search(r'time=([\d.]+)\s*ms', response.stdout)
@@ -113,7 +113,7 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
                 "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
                 "device_type": device.device_type, "os_type": device.os_type,
                 "username": device.username, "status": "online", "latency": latency,
-                "pos_x": device.pos_x, "pos_y": device.pos_y, "floor": device.floor
+                "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id
             }
 
     # Blast out all pings simultaneously (Lightning fast)
