@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 export default function SiteManager({ orgData, fetchOrgData }) {
   const [selectedBldg, setSelectedBldg] = useState(null);
@@ -9,6 +9,22 @@ export default function SiteManager({ orgData, fetchOrgData }) {
   const [newZoneName, setNewZoneName] = useState('');
 
   const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
+
+  // --- THE FIX: AUTO-SYNC UI WHEN DATABASE CHANGES ---
+  useEffect(() => {
+    if (selectedBldg) {
+      const updatedBldg = orgData.find(b => b.id === selectedBldg.id);
+      setSelectedBldg(updatedBldg || null);
+    }
+    if (selectedFloor) {
+      let foundFloor = null;
+      orgData.forEach(b => {
+        const f = b.floors.find(fl => fl.id === selectedFloor.id);
+        if (f) foundFloor = f;
+      });
+      setSelectedFloor(foundFloor || null);
+    }
+  }, [orgData]);
 
   const addBuilding = () => {
     if (!newBldgName) return;

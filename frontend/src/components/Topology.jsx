@@ -112,15 +112,13 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const nodeTypes = useMemo(() => ({ customDevice: CustomDeviceNode, customZone: CustomZoneNode }), []);
   const edgeTypes = useMemo(() => ({ customEdge: CustomEdge }), []); 
 
-  // Safely initialize selected zones on first load
   useEffect(() => {
     if (orgData.length > 0 && selectedZones.length === 0 && !activeView) {
       const allZones = orgData.flatMap(b => b.floors.flatMap(f => f.zones.map(z => z.id)));
-      setSelectedZones([...allZones, -1]); // -1 represents 'Unassigned'
+      setSelectedZones([...allZones, -1]); 
     }
   }, [orgData, selectedZones.length, activeView]);
 
-  // Load Saved Views from Backend
   useEffect(() => {
     fetch('http://127.0.0.1:8000/topology/views', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => res.ok ? res.json() : [])
@@ -128,7 +126,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(err => console.error("Failed to load views:", err));
   }, []);
 
-  // --- CASCADING CHECKBOX LOGIC ---
   const handleZoneToggle = (zoneId) => {
     setActiveView(null); 
     setSelectedZones(prev => prev.includes(zoneId) ? prev.filter(z => z !== zoneId) : [...prev, zoneId]);
@@ -150,38 +147,51 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     else { setSelectedZones(prev => [...new Set([...prev, ...bldgZoneIds])]); }
   };
 
-  // --- VIEW MANAGEMENT ---
+  // --- THE FIX: ADD VIEW UPDATING AND EXTRACT ZONE WIDTH/HEIGHT ---
   const handleSaveView = () => {
     if (!newViewName) return alert("Please enter a name for your view.");
-    
     const currentCoords = {};
-    nodes.filter(n => n.type === 'customDevice').forEach(n => {
-      currentCoords[n.id] = { x: n.position.x, y: n.position.y };
+    nodes.forEach(n => {
+      if (n.type === 'customDevice') currentCoords[n.id] = { x: n.position.x, y: n.position.y };
+      else if (n.type === 'customZone') currentCoords[n.id] = { x: n.position.x, y: n.position.y, width: n.width || n.style?.width, height: n.height || n.style?.height };
     });
-
-    const payload = { name: newViewName, zone_ids: selectedZones, coordinates: currentCoords };
 
     fetch('http://127.0.0.1:8000/topology/views', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ name: newViewName, zone_ids: selectedZones, coordinates: currentCoords })
     })
     .then(async res => { if (!res.ok) throw new Error(await res.text()); return res.json(); })
-    .then(newView => {
-      setSavedViews([...savedViews, newView]);
-      setNewViewName('');
-      setActiveView(newView);
-    })
+    .then(newView => { setSavedViews([...savedViews, newView]); setNewViewName(''); setActiveView(newView); })
     .catch(err => alert(`Failed to save view: ${err}`));
+  };
+
+  const handleUpdateActiveView = () => {
+    if (!activeView) return;
+    const currentCoords = {};
+    nodes.forEach(n => {
+      if (n.type === 'customDevice') currentCoords[n.id] = { x: n.position.x, y: n.position.y };
+      else if (n.type === 'customZone') currentCoords[n.id] = { x: n.position.x, y: n.position.y, width: n.width || n.style?.width, height: n.height || n.style?.height };
+    });
+
+    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
+    
+    // Smooth update: Delete old, POST new with same name
+    fetch(`http://127.0.0.1:8000/topology/views/${activeView.id}`, { method: 'DELETE', headers })
+    .then(() => fetch('http://127.0.0.1:8000/topology/views', { method: 'POST', headers, body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) }))
+    .then(res => res.json())
+    .then(newView => {
+      setSavedViews(prev => [...prev.filter(v => v.id !== activeView.id), newView]);
+      setActiveView(newView);
+      alert(`✅ View "${activeView.name}" updated successfully!`);
+    })
+    .catch(err => alert(`Failed to update view: ${err}`));
   };
 
   const handleDeleteView = (viewId) => {
     if (!window.confirm("Delete this saved view?")) return;
     fetch(`http://127.0.0.1:8000/topology/views/${viewId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
-    .then(() => {
-      setSavedViews(savedViews.filter(v => v.id !== viewId));
-      if (activeView?.id === viewId) setActiveView(null);
-    });
+    .then(() => { setSavedViews(savedViews.filter(v => v.id !== viewId)); if (activeView?.id === viewId) setActiveView(null); });
   };
 
   const handleLoadView = (view) => {
@@ -195,9 +205,10 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .then(res => res.ok ? res.json() : [])
     .then(edgeData => {
       let savedGhostPositions = {};
+      let savedZoneGeometries = {};
       try { savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}'); } catch (e) {}
+      try { savedZoneGeometries = JSON.parse(localStorage.getItem('vnms_zone_geometries') || '{}'); } catch (e) {} // <-- NEW: Load Global Zone Sizes
 
-      // 1. CREATE VISUAL ZONE BOXES
       const visibleZoneIds = [...new Set(devices.map(d => d.zone_id || -1))].filter(z => selectedZones.includes(z));
       let currentNodes = [];
 
@@ -205,19 +216,29 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         let zName = zoneId === -1 ? "Unassigned Devices" : "Unknown Zone";
         orgData.forEach(b => b.floors.forEach(f => f.zones.forEach(z => { if(z.id === zoneId) zName = z.name; })));
 
+        const boxId = `box-${zoneId}`;
+        const defX = savedZoneGeometries[boxId]?.x ?? 50 + (index * 450);
+        const defY = savedZoneGeometries[boxId]?.y ?? 50;
+        const defW = savedZoneGeometries[boxId]?.width ?? 400;
+        const defH = savedZoneGeometries[boxId]?.height ?? 400;
+
+        // Apply saved view size, or fall back to global local storage
+        let spawnX = activeView?.coordinates?.[boxId]?.x ?? defX;
+        let spawnY = activeView?.coordinates?.[boxId]?.y ?? defY;
+        let zWidth = activeView?.coordinates?.[boxId]?.width ?? defW;
+        let zHeight = activeView?.coordinates?.[boxId]?.height ?? defH;
+
         currentNodes.push({
-          id: `box-${zoneId}`, type: 'customZone',
-          position: { x: 50 + (index * 450), y: 50 }, 
+          id: boxId, type: 'customZone',
+          position: { x: spawnX, y: spawnY },
           data: { label: zName },
-          style: { width: 400, height: 400, zIndex: -1 } 
+          style: { width: zWidth, height: zHeight, zIndex: -1 } 
         });
       });
 
-      // 2. MOUNT DEVICES INSIDE ZONES
       devices.forEach((dev, index) => {
         const devZone = dev.zone_id || -1;
         if (selectedZones.includes(devZone)) {
-          
           let spawnX = activeView?.coordinates?.[dev.hostname]?.x ?? dev.pos_x ?? 50;
           let spawnY = activeView?.coordinates?.[dev.hostname]?.y ?? dev.pos_y ?? 80;
 
@@ -229,7 +250,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         }
       });
 
-      // 3. MAP EDGES (Dangling Edge Protection)
       const activeNodeIds = new Set(currentNodes.map(n => n.id));
       const formattedEdges = [];
       let rogueOffset = 0;
@@ -238,7 +258,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         if (activeNodeIds.has(edge.source_hostname) && activeNodeIds.has(edge.target_hostname)) {
           const isBlocked = edge.link_type.includes('_blocked');
           const baseLinkType = edge.link_type.replace('_blocked', '');
-
           formattedEdges.push({
             id: `e-${edge.id}`, source: edge.source_hostname, target: edge.target_hostname, type: 'customEdge', 
             data: { source_port: edge.source_port, target_port: edge.target_port, utilization: edge.current_utilization, original_stroke: baseLinkType === 'trunk' ? '#007acc' : '#777' },
@@ -287,9 +306,13 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     setIsSaving(true);
     const coordinates = [];
     const ghostPositions = {};
+    const zoneGeometries = {};
 
     nodes.forEach(n => {
-      if (n.type === 'customZone') return;
+      if (n.type === 'customZone') {
+        zoneGeometries[n.id] = { x: n.position.x, y: n.position.y, width: n.width || n.style?.width || 400, height: n.height || n.style?.height || 400 };
+        return;
+      }
       if (n.data.status === 'unmanaged') ghostPositions[n.id] = { x: n.position.x, y: n.position.y };
       else {
         const targetDevice = devices.find(d => d.hostname === n.id);
@@ -298,9 +321,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     });
 
     localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
+    localStorage.setItem('vnms_zone_geometries', JSON.stringify(zoneGeometries)); // <-- NEW: Saves Zone Resizing Globally
+
     fetch('http://127.0.0.1:8000/topology/update-coordinates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify(coordinates) })
     .then(async res => { if (!res.ok) { const err = await res.json(); throw new Error(err.detail); } return res.json(); })
-    .then(() => { setIsSaving(false); alert("✅ Global Map Layout saved successfully!"); if (fetchNetworkStatus) fetchNetworkStatus(); })
+    .then(() => { setIsSaving(false); alert("✅ Global Map Layout and Zone Sizes saved successfully!"); if (fetchNetworkStatus) fetchNetworkStatus(); })
     .catch(err => { console.error(err); alert(`❌ Failed: ${err.message}`); setIsSaving(false); });
   };
 
@@ -318,6 +343,14 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           <div style={{ padding: '20px', flex: 1, overflowY: 'auto' }}>
             
             <h4 style={{ margin: '0 0 10px 0', color: '#fff', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Saved Views</h4>
+            
+            {/* NEW: UPDATE ACTIVE VIEW BUTTON */}
+            {activeView && (
+              <button onClick={handleUpdateActiveView} style={{ width: '100%', padding: '10px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
+                💾 Update "{activeView.name}"
+              </button>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '15px' }}>
               {savedViews.map(view => (
                 <div key={view.id} style={{ display: 'flex', gap: '5px' }}>
@@ -328,7 +361,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
             </div>
 
             <div style={{ display: 'flex', gap: '5px', marginBottom: '25px' }}>
-              <input type="text" placeholder="Save current layout as..." value={newViewName} onChange={(e) => setNewViewName(e.target.value)} style={{ flex: 1, padding: '8px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }} />
+              <input type="text" placeholder="Save as new view..." value={newViewName} onChange={(e) => setNewViewName(e.target.value)} style={{ flex: 1, padding: '8px', backgroundColor: '#1e1e1e', color: '#fff', border: '1px solid #444', borderRadius: '4px' }} />
               <button onClick={handleSaveView} style={{ padding: '8px 12px', backgroundColor: '#4caf50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Save</button>
             </div>
 
