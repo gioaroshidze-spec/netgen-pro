@@ -2,12 +2,13 @@ import tempfile
 import subprocess
 import json
 import os
-from logger import log_event  # <-- Import the universal logger
+from logger import log_event
 
 def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution", is_check_mode=True, author="System"):
     """
-    Executes Ansible, streams output to the UI, and logs the entire transaction to the DB.
+    Executes Ansible, dynamically builds OS-specific task blocks, streams output, and logs to DB.
     """
+    # Fix list-only AI outputs just in case
     for host, data in ai_config_data.items():
         if isinstance(data, list):
             ai_config_data[host] = {"config": data, "exec": []}
@@ -21,10 +22,19 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
             json.dump({"ai_config": ai_config_data}, f)
 
         inventory_data = {"all": {"hosts": {}}}
+        os_types_present = set()
+
+        # 1. BUILD MULTI-VENDOR INVENTORY
         for dev in devices:
-            ansible_os = "cisco.ios.ios"
-            if dev.os_type == "aruba": ansible_os = "arubanetworks.aoscx.aoscx"
-            elif dev.os_type == "hpe": ansible_os = "community.network.ce" 
+            os_type = (dev.os_type or "cisco").lower()
+            os_types_present.add(os_type)
+            
+            # Map database OS string to the exact Ansible Network OS Collection
+            if os_type == "aruba": ansible_os = "arubanetworks.aoscx.aoscx"
+            elif os_type == "hpe": ansible_os = "community.network.aruba"
+            elif os_type == "mikrotik": ansible_os = "community.routeros.routeros"
+            elif os_type in ["alcatel", "alcatel-lucent"]: ansible_os = "community.network.alcatel_aos"
+            else: ansible_os = "cisco.ios.ios"
             
             inventory_data["all"]["hosts"][dev.hostname] = {
                 "ansible_host": dev.ip_address,
@@ -33,7 +43,8 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
                 "ansible_network_cli_ssh_type": "paramiko", 
                 "ansible_user": dev.username or "admin",
                 "ansible_password": os.getenv("DEVICE_PASSWORD", "Werfds123"),
-                "ansible_ssh_common_args": "-o MACs=+hmac-sha1 -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa"
+                # Added StrictHostKeyChecking=no to prevent SSH fingerprint blocks across new vendors
+                "ansible_ssh_common_args": "-o MACs=+hmac-sha1 -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no"
             }
         
         with open(inventory_path, 'w') as f:
@@ -43,45 +54,92 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
                 for k, v in vars_dict.items():
                     f.write(f"      {k}: {v}\n")
 
-        playbook_content = """
-- name: VNMS JSON Data Model Deployment
+        # 2. DYNAMICALLY GENERATE PLAYBOOK TASKS
+        tasks_yaml = ""
+        
+        if "cisco" in os_types_present:
+            tasks_yaml += """
+    - name: (CISCO) Apply Configuration
+      cisco.ios.ios_config:
+        lines: "{{ ai_config[inventory_hostname]['config'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'cisco.ios.ios'
+
+    - name: (CISCO) Run Exec Commands
+      cisco.ios.ios_command:
+        commands: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'cisco.ios.ios' and not ansible_check_mode
+"""
+
+        if "aruba" in os_types_present:
+            tasks_yaml += """
+    - name: (ARUBA AOS-CX) Apply Configuration
+      arubanetworks.aoscx.aoscx_config:
+        lines: "{{ ai_config[inventory_hostname]['config'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'arubanetworks.aoscx.aoscx'
+
+    - name: (ARUBA AOS-CX) Run Exec Commands
+      arubanetworks.aoscx.aoscx_command:
+        commands: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'arubanetworks.aoscx.aoscx' and not ansible_check_mode
+"""
+
+        if "hpe" in os_types_present:
+            tasks_yaml += """
+    - name: (HPE PROVISION) Apply Configuration
+      community.network.aruba_config:
+        lines: "{{ ai_config[inventory_hostname]['config'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.network.aruba'
+
+    - name: (HPE PROVISION) Run Exec Commands
+      community.network.aruba_command:
+        commands: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.network.aruba' and not ansible_check_mode
+"""
+
+        if "mikrotik" in os_types_present:
+            tasks_yaml += """
+    - name: (MIKROTIK) Apply Configuration Commands
+      community.routeros.command:
+        commands: "{{ ai_config[inventory_hostname]['config'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.routeros.routeros' and not ansible_check_mode
+
+    - name: (MIKROTIK) Run Exec Commands
+      community.routeros.command:
+        commands: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.routeros.routeros' and not ansible_check_mode
+"""
+
+        if "alcatel" in os_types_present or "alcatel-lucent" in os_types_present:
+            tasks_yaml += """
+    - name: (ALCATEL) Apply Configuration
+      ansible.netcommon.cli_config:
+        config: "{{ ai_config[inventory_hostname]['config'] | join('\\n') }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.network.alcatel_aos'
+
+    - name: (ALCATEL) Run Exec Commands
+      ansible.netcommon.cli_command:
+        command: "{{ item }}"
+      loop: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
+      when: inventory_hostname in ai_config and ansible_network_os == 'community.network.alcatel_aos' and not ansible_check_mode
+"""
+
+        playbook_content = f"""
+- name: VNMS Multi-Vendor Configuration Deployment
   hosts: all
   gather_facts: no
   vars_files:
     - vars.json
   tasks:
-    - name: PHASE 1 - Apply Configuration Commands
-      cisco.ios.ios_config:
-        lines: "{{ ai_config[inventory_hostname]['config'] | default([]) }}"
-      when: 
-        - inventory_hostname in ai_config 
-        - ai_config[inventory_hostname]['config'] is defined
-        - ai_config[inventory_hostname]['config'] | length > 0
-      register: config_result
-
-    - name: PHASE 2 - Run Exec Commands (Save / Show)
-      cisco.ios.ios_command:
-        commands: "{{ ai_config[inventory_hostname]['exec'] | default([]) }}"
-      when: 
-        - inventory_hostname in ai_config 
-        - ai_config[inventory_hostname]['exec'] is defined
-        - ai_config[inventory_hostname]['exec'] | length > 0
-        - not ansible_check_mode
-      register: exec_result
-
-    - name: PRINT RESULTS
-      debug:
-        msg:
-          config_changed: "{{ config_result.changed | default(false) }}"
-          config_updates: "{{ config_result.updates | default([]) }}"
-          exec_output: "{{ exec_result.stdout_lines | default(['Skipped in Simulation Mode']) }}"
+{tasks_yaml}
 """
         with open(playbook_path, 'w') as f:
             f.write(playbook_content)
 
+        # 3. EXECUTE PLAYBOOK
         mode_text = "DRY-RUN SIMULATION (--check)" if is_check_mode else "LIVE PRODUCTION PUSH"
-        yield "data: --- INITIALIZING VNMS ANSIBLE ENGINE ---\n\n"
+        yield "data: --- INITIALIZING VNMS MULTI-VENDOR ANSIBLE ENGINE ---\n\n"
         yield f"data: Target Devices: {', '.join([d.hostname for d in devices])}\n\n"
+        yield f"data: OS Types Detected: {', '.join([os.upper() for os in os_types_present])}\n\n"
         yield f"data: Executing {mode_text}...\n\n"
         yield "data: --------------------------------------------------\n\n"
 
@@ -98,7 +156,6 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
             text=True, bufsize=1, universal_newlines=True, env=env
         )
 
-        # --- NEW: Capture Output for Logging ---
         ansible_full_log = ""
         for line in process.stdout:
             clean_line = line.rstrip('\r\n')
@@ -108,7 +165,7 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
         process.stdout.close()
         process.wait()
 
-        # --- NEW: Inject the Audit Log ---
+        # 4. AUDIT LOGGING
         severity = "SUCCESS" if process.returncode == 0 else "ERROR"
         action = "Configuration Simulation" if is_check_mode else "Live Configuration Push"
         
