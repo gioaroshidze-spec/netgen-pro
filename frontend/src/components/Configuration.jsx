@@ -39,7 +39,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     setIsAiGenerating(true);
     fetch('http://127.0.0.1:8000/configuration/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+       },
       body: JSON.stringify({
         prompt: aiPrompt,
         switches: selectedSwitches,
@@ -78,7 +80,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     setIsSavingTemplate(true);
     fetch('http://127.0.0.1:8000/templates/', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+       },
       body: JSON.stringify({
         name: templateName,
         category: templateCategory,
@@ -120,7 +124,8 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       
       const response = await fetch(`http://127.0.0.1:8000${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 
+          'Authorization': `Bearer ${localStorage.getItem('token')}`},
         body: JSON.stringify({
           prompt: aiPrompt,
           config_text: generatedAiConfig,

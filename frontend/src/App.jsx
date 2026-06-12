@@ -74,7 +74,7 @@ function App() {
       .catch(err => { console.error(err); setIsRefreshing(false) })
   }
 
-  // <-- NEW: FETCH ORG DATA -->
+ // <-- NEW: FETCH ORG DATA -->
   const fetchOrgData = () => {
     fetch('http://127.0.0.1:8000/organization/hierarchy', {
       headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
@@ -88,26 +88,30 @@ function App() {
     .catch(err => console.error(err))
   }
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    fetchNetworkStatus()
-    fetchOrgData() 
-    
+  // <-- EXTRACTED ARCHIVE FETCH FUNCTION -->
+  const fetchArchiveFiles = () => {
     fetch('http://127.0.0.1:8000/archive/files', {
       headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
     })
-      .then(res => {
-        if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
-        if (!res.ok) throw new Error("Failed to fetch archives");
-        return res.json();
-      })
-      .then(data => setArchiveFiles(data))
-      .catch(err => console.error("Failed to load archive:", err))
+    .then(res => {
+      if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
+      if (!res.ok) throw new Error("Failed to fetch archives");
+      return res.json();
+    })
+    .then(data => setArchiveFiles(data))
+    .catch(err => console.error("Failed to load archive:", err))
+  }
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    fetchNetworkStatus();
+    fetchOrgData(); 
+    fetchArchiveFiles(); // Initial fetch on load
 
     const intervalId = setInterval(() => {
       fetchNetworkStatus();
-      fetchArchiveFiles();
+      fetchArchiveFiles(); // Timer now successfully calls the function
     }, 30000)
     return () => clearInterval(intervalId)
   }, [isAuthenticated])
