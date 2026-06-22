@@ -40,11 +40,10 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
                 "ansible_host": dev.ip_address,
                 "ansible_network_os": ansible_os,
                 "ansible_connection": "network_cli",
-                "ansible_network_cli_ssh_type": "paramiko", 
                 "ansible_user": dev.username or "admin",
                 "ansible_password": os.getenv("DEVICE_PASSWORD", "Werfds123"),
-                # Added StrictHostKeyChecking=no to prevent SSH fingerprint blocks across new vendors
-                "ansible_ssh_common_args": "-o MACs=+hmac-sha1 -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no"
+                # We tell Ansible to ignore the strict host key checking (the yes/no prompt), but we rely on modern RSA keys now!
+                "ansible_ssh_common_args": "-o StrictHostKeyChecking=no"
             }
         
         with open(inventory_path, 'w') as f:

@@ -52,7 +52,7 @@ async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query
         await asyncio.to_thread(
             ssh.connect, hostname=device.ip_address, username=user,
             password=password, look_for_keys=False, allow_agent=False, timeout=10,
-            disabled_algorithms={'keys': [], 'pubkeys': []} # <-- THE FIX: Re-enables legacy ssh-rsa host keys
+            disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512'], 'keys': []} # <-- THE FIX: Re-enables legacy ssh-rsa host keys
         )
 
         channel = ssh.invoke_shell()
