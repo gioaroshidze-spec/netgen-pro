@@ -49,6 +49,7 @@ class DeviceCreate(BaseModel):
     device_type: str
     os_type: str
     username: str
+    is_legacy: Optional[bool] = False
     pos_x: Optional[float] = 100.0       
     pos_y: Optional[float] = 100.0       
     zone_id: Optional[int] = None # <-- REPLACED 'floor' with relational zone_id
@@ -70,6 +71,7 @@ class DeviceUpdate(BaseModel):
     device_type: Optional[str] = None
     os_type: Optional[str] = None
     username: Optional[str] = None
+    is_legacy: Optional[bool] = False
     pos_x: Optional[float] = None        
     pos_y: Optional[float] = None        
     zone_id: Optional[int] = None # <-- REPLACED 'floor' with relational zone_id

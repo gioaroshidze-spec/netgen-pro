@@ -47,6 +47,8 @@ class NetworkDevice(Base):
     os_type = Column(String, default="cisco") 
     username = Column(String)
     
+    is_legacy = Column(Boolean, default=False)
+
     # --- VISUALIZATION PILLARS ---
     pos_x = Column(Float, default=100.0)       
     pos_y = Column(Float, default=100.0)       
