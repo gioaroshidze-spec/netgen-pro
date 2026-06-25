@@ -5,53 +5,39 @@ import Maintenance from './components/Maintenance'
 import Configuration from './components/Configuration'
 import EventLogs from './components/EventLogs'
 import Templates from './components/Templates'
-import CLI from './components/CLI'
+import CLI, { TerminalWindow } from './components/CLI' // <-- IMPORTED TERMINAL WINDOW
 import Login from './components/Login'
 import Users from './components/Users'
 import Dashboard from './components/Dashboard'
-import Topology from './components/Topology' // <-- RESTORED TOPOLOGY IMPORT
+import Topology from './components/Topology' 
 
-// --- CENTRALIZED API URL ---
 const MAP_URL = 'http://127.0.0.1:8000/network-map/'
 
 function App() {
-  // --- AUTHENTICATION & ROLE STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
   const userRole = localStorage.getItem('role') || 'viewer'
   const currentUsername = localStorage.getItem('username')
 
-  // --- STANDARD APP STATE ---
-  const [activeTab, setActiveTab] = useState(() => {
-    return localStorage.getItem('vnmsActiveTab') || 'Dashboard' 
-  })
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('vnmsActiveTab') || 'Dashboard')
+  
   useEffect(() => {
-    if (isAuthenticated) {
-      localStorage.setItem('vnmsActiveTab', activeTab)
-    }
+    if (isAuthenticated) localStorage.setItem('vnmsActiveTab', activeTab)
   }, [activeTab, isAuthenticated])
   
   const [loadedTemplate, setLoadedTemplate] = useState(null)
   const [devices, setDevices] = useState([])
-  const [orgData, setOrgData] = useState([]) // <-- NEW: ORG TREE STATE
+  const [orgData, setOrgData] = useState([]) 
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [archiveFiles, setArchiveFiles] = useState({})
   
-  // Configuration Target States
   const [selectedSwitches, setSelectedSwitches] = useState([])
   const [selectedRouters, setSelectedRouters] = useState([])
-  
-  // Sidebar Search States
   const [connectionSearch, setConnectionSearch] = useState('')
   const [dropdownSearch, setDropdownSearch] = useState('')
 
-  // --- DYNAMIC TABS BASED ON ROLE ---
-  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs', 'Topology'] // <-- ADDED TOPOLOGY TAB
-  
-  if (currentUsername === 'admin') {
-    TABS.push('Users')
-  }
+  const TABS = ['Dashboard', 'Configuration', 'Maintenance', 'Compare', 'Templates', 'CLI', 'Inventory', 'Event Logs', 'Topology']
+  if (currentUsername === 'admin') TABS.push('Users')
 
-  // --- LOGOUT ROUTINE ---
   const handleLogout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('username')
@@ -59,12 +45,9 @@ function App() {
     setIsAuthenticated(false)
   }
 
-// --- DATA FETCHING ---
   const fetchNetworkStatus = () => {
     setIsRefreshing(true)
-    fetch(MAP_URL, {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
-    })
+    fetch(MAP_URL, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
       .then(res => {
         if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
         if (!res.ok) throw new Error("Failed to fetch network map");
@@ -74,11 +57,8 @@ function App() {
       .catch(err => { console.error(err); setIsRefreshing(false) })
   }
 
- // <-- NEW: FETCH ORG DATA -->
   const fetchOrgData = () => {
-    fetch('http://127.0.0.1:8000/organization/hierarchy', {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-    })
+    fetch('http://127.0.0.1:8000/organization/hierarchy', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => {
       if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
       if (!res.ok) throw new Error("Failed to fetch org tree");
@@ -88,11 +68,8 @@ function App() {
     .catch(err => console.error(err))
   }
 
-  // <-- EXTRACTED ARCHIVE FETCH FUNCTION -->
   const fetchArchiveFiles = () => {
-    fetch('http://127.0.0.1:8000/archive/files', {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
-    })
+    fetch('http://127.0.0.1:8000/archive/files', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => {
       if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
       if (!res.ok) throw new Error("Failed to fetch archives");
@@ -104,19 +81,38 @@ function App() {
 
   useEffect(() => {
     if (!isAuthenticated) return;
-
     fetchNetworkStatus();
     fetchOrgData(); 
-    fetchArchiveFiles(); // Initial fetch on load
-
+    fetchArchiveFiles(); 
     const intervalId = setInterval(() => {
       fetchNetworkStatus();
-      fetchArchiveFiles(); // Timer now successfully calls the function
+      fetchArchiveFiles(); 
     }, 30000)
     return () => clearInterval(intervalId)
   }, [isAuthenticated])
 
-  // --- SORTING & FILTERING LOGIC FOR SIDEBAR ---
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
+  }
+
+  // =================================================================
+  // --- THE FIX: INTERCEPT POPUP CLI REQUESTS ---
+  // =================================================================
+  const urlParams = new URLSearchParams(window.location.search);
+  const cliTargetId = urlParams.get('cli');
+
+  if (cliTargetId && devices.length > 0) {
+    const targetDev = devices.find(d => d.id.toString() === cliTargetId);
+    if (targetDev) {
+      return (
+        <div style={{ height: '100vh', width: '100vw', backgroundColor: '#000', boxSizing: 'border-box' }}>
+          <TerminalWindow device={targetDev} isActive={true} onClose={() => window.close()} />
+        </div>
+      );
+    }
+  }
+  // =================================================================
+
   const sortConnections = (a, b) => {
     if (a.status === 'online' && b.status !== 'online') return -1;
     if (a.status !== 'online' && b.status === 'online') return 1;
@@ -126,29 +122,19 @@ function App() {
 
   const allSwitches = devices.filter(d => d.device_type !== 'router')
   const allRouters = devices.filter(d => d.device_type === 'router')
-
   const switchConnections = allSwitches.filter(d => d.hostname.toLowerCase().includes(connectionSearch.toLowerCase())).sort(sortConnections)
   const routerConnections = allRouters.filter(d => d.hostname.toLowerCase().includes(connectionSearch.toLowerCase())).sort(sortConnections)
-  
   const maxConnectionsToShow = activeTab === 'Configuration' ? 3 : 100
 
   const toggleSelection = (hostname, list, setList) => {
     setList(prev => prev.includes(hostname) ? prev.filter(h => h !== hostname) : [...prev, hostname])
   }
 
-  if (!isAuthenticated) {
-    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
-  }
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', backgroundColor: '#1e1e1e', color: '#fff' }}>
-      
-      {/* ================= TOP NAVIGATION TABS ================= */}
       <div style={{ display: 'flex', backgroundColor: '#252526', borderBottom: '1px solid #333', padding: '0 20px', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <h2 onClick={() => setActiveTab('Configuration')} style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}>
-            VNMS
-          </h2>
+          <h2 onClick={() => setActiveTab('Configuration')} style={{ marginRight: '40px', color: '#007acc', letterSpacing: '1px', cursor: 'pointer' }}>VNMS</h2>
           <div style={{ display: 'flex', gap: '2px' }}>
             {TABS.map(tab => (
               <button 
@@ -163,19 +149,13 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <span style={{ fontSize: '0.9rem', color: '#aaa' }}>
             Logged in as: <strong style={{ color: '#fff', textTransform: 'capitalize' }}>{localStorage.getItem('username')}</strong> 
-            <span style={{ marginLeft: '8px', padding: '2px 6px', backgroundColor: userRole === 'admin' ? '#4caf5022' : '#007acc22', color: userRole === 'admin' ? '#4caf50' : '#007acc', borderRadius: '4px', fontSize: '0.75rem', textTransform: 'uppercase' }}>
-              {userRole}
-            </span>
+            <span style={{ marginLeft: '8px', padding: '2px 6px', backgroundColor: userRole === 'admin' ? '#4caf5022' : '#007acc22', color: userRole === 'admin' ? '#4caf50' : '#007acc', borderRadius: '4px', fontSize: '0.75rem', textTransform: 'uppercase' }}>{userRole}</span>
           </span>
-          <button onClick={handleLogout} style={{ padding: '6px 12px', backgroundColor: 'transparent', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            Logout
-          </button>
+          <button onClick={handleLogout} style={{ padding: '6px 12px', backgroundColor: 'transparent', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>Logout</button>
         </div>
       </div>
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        
-        {/* ================= DYNAMIC SIDEBAR ================= */}
         <div style={{ width: '320px', backgroundColor: '#252526', padding: '1.5rem', borderRight: '1px solid #333', overflowY: 'auto', position: 'sticky', top: '0', height: '100vh'}}>
           <div style={{ marginBottom: '30px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -233,7 +213,6 @@ function App() {
           )}
         </div>
 
-        {/* ================= MAIN CONTENT AREA ================= */}
         <div style={{ flex: 1, padding: '2rem', overflowY: 'auto' }}>
           {activeTab === 'Dashboard' && <Dashboard devices={devices} setActiveTab={setActiveTab} userRole={userRole} />}
           {activeTab === 'Maintenance' && <Maintenance devices={devices} archiveFiles={archiveFiles} userRole={userRole} />}
