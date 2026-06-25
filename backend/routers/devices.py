@@ -9,7 +9,7 @@ import subprocess
 import concurrent.futures
 
 # --- NEW: IMPORT THE BOUNCERS ---
-from routers.auth import get_current_user, get_current_admin
+from routers.auth import get_current_user, get_current_admin, encrypt_secret
 
 router = APIRouter(tags=["Inventory & Devices"])
 
@@ -24,7 +24,15 @@ def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db), c
     if existing_ip:
         raise HTTPException(status_code=400, detail=f"Error: IP Address '{device.ip_address}' is already in use.")
 
-    db_device = models.NetworkDevice(**device.model_dump())
+    # 1. Safely load the data without the raw password
+    device_data = device.model_dump(exclude={"password"})
+    db_device = models.NetworkDevice(**device_data)
+
+    # 2. Encrypt and attach the password
+    if device.password:
+        db_device.encrypted_password = encrypt_secret(device.password)
+
+    # 3. Add to DB directly (Removed the buggy overwrite line!)
     db.add(db_device)
     db.commit()
     db.refresh(db_device)
@@ -53,13 +61,18 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
         if existing_ip:
             raise HTTPException(status_code=400, detail=f"Error: IP Address '{device_update.ip_address}' is already in use.")
     
-    update_data = device_update.model_dump(exclude_unset=True)
+    # --- THE FIX: Initialize the changes dictionary ---
     changes = {}
+    
+    update_data = device_update.model_dump(exclude_unset=True, exclude={"password"})
     for key, value in update_data.items():
-        old_value = getattr(db_device, key)
-        if old_value != value:
-            changes[key] = {"old": old_value, "new": value}
+        if getattr(db_device, key) != value:
+            changes[key] = value # Track what changed
         setattr(db_device, key, value)
+        
+    if device_update.password:
+        db_device.encrypted_password = encrypt_secret(device_update.password)
+        changes["password"] = "Updated (Encrypted)" # Keep the actual password out of the logs!
 
     db.commit()
     db.refresh(db_device)

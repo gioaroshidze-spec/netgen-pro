@@ -49,6 +49,7 @@ class DeviceCreate(BaseModel):
     device_type: str
     os_type: str
     username: str
+    password: Optional[str] = None
     is_legacy: Optional[bool] = False
     pos_x: Optional[float] = 100.0       
     pos_y: Optional[float] = 100.0       
@@ -71,10 +72,24 @@ class DeviceUpdate(BaseModel):
     device_type: Optional[str] = None
     os_type: Optional[str] = None
     username: Optional[str] = None
+    password: Optional[str] = None
     is_legacy: Optional[bool] = False
     pos_x: Optional[float] = None        
     pos_y: Optional[float] = None        
     zone_id: Optional[int] = None # <-- REPLACED 'floor' with relational zone_id
+
+
+# --- NEW: USER MANAGEMENT SCHEMAS ---
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    role: str
+    requires_password_change: bool
+    class Config:
+        from_attributes = True
+
+class AdminPasswordReset(BaseModel):
+    new_password: str
 
 
 # --- CONFIG GENERATOR SCHEMAS ---

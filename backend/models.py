@@ -46,7 +46,7 @@ class NetworkDevice(Base):
     device_type = Column(String)          
     os_type = Column(String, default="cisco") 
     username = Column(String)
-    
+    encrypted_password = Column(String, nullable=True)
     is_legacy = Column(Boolean, default=False)
 
     # --- VISUALIZATION PILLARS ---

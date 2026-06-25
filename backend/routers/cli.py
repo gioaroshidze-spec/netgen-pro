@@ -8,6 +8,7 @@ import models
 
 # Re-import variables to decode the token manually
 from routers.auth import SECRET_KEY, ALGORITHM
+from routers.auth import decrypt_secret
 
 router = APIRouter(tags=["CLI"])
 
@@ -46,7 +47,7 @@ async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query
     try:
         await websocket.send_text(f"\r\n[INFO] Initializing SSH connection to {device.hostname} ({device.ip_address})...\r\n")
 
-        password = os.getenv("DEVICE_PASSWORD", "Werfds123")
+        password = decrypt_secret(device.encrypted_password)
         user = device.username or "admin"
 
         await asyncio.to_thread(

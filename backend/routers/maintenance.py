@@ -14,6 +14,7 @@ from logger import log_event
 
 # --- IMPORT THE BOUNCERS ---
 from routers.auth import get_current_admin
+from routers.auth import decrypt_secret
 
 load_dotenv()
 
@@ -30,7 +31,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
     
     connection_params = {
         'device_type': 'cisco_ios', 'host': device.ip_address,
-        'username': device.username, 'password': os.getenv("DEVICE_PASSWORD")
+        'username': device.username, 'password': decrypt_secret(device.encrypted_password)
     }
 
     try:
@@ -81,7 +82,7 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
             if device:
                 connection_params = {
                     'device_type': 'cisco_ios', "host": device.ip_address,
-                    'username': device.username, 'password': os.getenv("DEVICE_PASSWORD")
+                    'username': device.username, 'password': decrypt_secret(device.encrypted_password)
                 }
                 try:
                     with ConnectHandler(**connection_params) as net_connect:
@@ -192,7 +193,7 @@ async def restore_devices(
                 if target_file:
                     inv.write(
                         f'{dev.hostname} ansible_host={dev.ip_address} ansible_user={dev.username} '
-                        f'ansible_password={os.getenv("DEVICE_PASSWORD")} ansible_become=yes '
+                        f'ansible_password={decrypt_secret(dev.encrypted_password)} ansible_become=yes '
                         f'ansible_become_method=enable ansible_network_os=cisco.ios.ios '
                         f'ansible_connection=network_cli restore_file="{target_file}"\n'
                     )

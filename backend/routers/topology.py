@@ -13,6 +13,7 @@ import models, schemas
 from routers.auth import get_current_user, get_current_admin
 from netmiko import ConnectHandler, file_transfer
 from logger import log_event
+from routers.auth import decrypt_secret
 
 router = APIRouter(tags=["Topology & Power"])
 
@@ -52,7 +53,7 @@ def background_discovery(username: str):
             if device.os_type == 'cisco':
                 connection_params = {
                     'device_type': 'cisco_ios', 'host': device.ip_address,
-                    'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                    'username': device.username, 'password': decrypt_secret(device.encrypted_password),
                     'fast_cli': True
                 }
 
@@ -185,7 +186,7 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
     try:
         connection_params = {
             'device_type': 'cisco_ios', 'host': device.ip_address,
-            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
             'fast_cli': True, 'auth_timeout': 5, 'banner_timeout': 5
         }
         
@@ -234,7 +235,7 @@ def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(
     try:
         connection_params = {
             'device_type': 'cisco_ios', 'host': device.ip_address,
-            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
             'fast_cli': True
         }
         
@@ -287,7 +288,7 @@ def background_reboot(device_id: int, username: str):
         netmiko_os = 'hp_procurve' if device.os_type in ['aruba', 'hpe'] else 'cisco_ios'
         if device.os_type == 'mikrotik': netmiko_os = 'mikrotik_routeros'
 
-        connection_params = { 'device_type': netmiko_os, 'host': device.ip_address, 'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123") }
+        connection_params = { 'device_type': netmiko_os, 'host': device.ip_address, 'username': device.username, 'password': decrypt_secret(device.encrypted_password) }
 
         with ConnectHandler(**connection_params) as net_connect:
             net_connect.enable()
@@ -331,7 +332,7 @@ def execute_port_action(request: PortOperationRequest, db: Session = Depends(get
     try:
         connection_params = {
             'device_type': 'cisco_ios', 'host': device.ip_address,
-            'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
             'fast_cli': True
         }
         

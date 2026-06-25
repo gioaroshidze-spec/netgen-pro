@@ -3,6 +3,7 @@ import subprocess
 import json
 import os
 from logger import log_event
+from routers.auth import decrypt_secret
 
 def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution", is_check_mode=True, author="System"):
     """
@@ -41,7 +42,7 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
                 "ansible_network_os": ansible_os,
                 "ansible_connection": "network_cli",
                 "ansible_user": dev.username or "admin",
-                "ansible_password": os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                "ansible_password": decrypt_secret(dev.encrypted_password),
                 # We tell Ansible to ignore the strict host key checking (the yes/no prompt), but we rely on modern RSA keys now!
                 "ansible_ssh_common_args": "-o StrictHostKeyChecking=no"
             }

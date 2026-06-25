@@ -13,6 +13,7 @@ from netmiko import ConnectHandler
 # --- IMPORT THE BOUNCERS ---
 from routers.auth import get_current_user
 from ansible_engine import run_ansible_playbook
+from routers.auth import decrypt_secret
 
 router = APIRouter(tags=["Configuration Engine"])
 
@@ -66,7 +67,7 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
                 
                 connection_params = {
                     'device_type': netmiko_os, 'host': dev.ip_address,
-                    'username': dev.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                    'username': dev.username, 'password': decrypt_secret(dev.encrypted_password),
                     'fast_cli': True
                 }
                 
