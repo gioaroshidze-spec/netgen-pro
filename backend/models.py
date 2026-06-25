@@ -91,7 +91,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    role = Column(String, default="admin")       
+    role = Column(String, default="admin")
+
+    requires_password_change = Column(Boolean, default=False)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 class ScheduledJob(Base):

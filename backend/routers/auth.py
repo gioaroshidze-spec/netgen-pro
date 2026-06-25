@@ -6,12 +6,14 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 import jwt
 import os
+import secrets # <-- NEW: For cryptographically secure random keys
 
 from database import get_db
 import models
 
-# --- SECURITY CONFIGURATION ---
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super_secret_enterprise_key_12345") 
+# --- SECURED CONFIGURATION ---
+# Auto-generates a cryptographically secure 256-bit key if not provided via .env
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32)) 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 # 24 Hours
 
@@ -28,6 +30,11 @@ class UserCreateRequest(BaseModel):
     password: str
     role: str
 
+# --- NEW: SCHEMA FOR PASSWORD CHANGE ---
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
+
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -38,7 +45,7 @@ def create_access_token(data: dict):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 # ==========================================
-# --- NEW: THE SECURITY DEPENDENCIES ---
+# --- THE SECURITY DEPENDENCIES ---
 # ==========================================
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Verifies the JWT token and returns the user object. Rejects invalid/expired tokens."""
@@ -83,7 +90,14 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
         )
     
     access_token = create_access_token(data={"sub": user.username, "role": user.role})
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+    
+    # --- SECURED: Return the trap flag to React ---
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer", 
+        "role": user.role,
+        "requires_password_change": user.requires_password_change 
+    }
 
 @router.post("/auth/users")
 def create_new_user(request: UserCreateRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin)):
@@ -98,3 +112,18 @@ def create_new_user(request: UserCreateRequest, db: Session = Depends(get_db), c
     db.commit()
     
     return {"message": f"User '{request.username}' created successfully as a {request.role}."}
+
+# --- NEW: THE PASSWORD CHANGE PIPELINE ---
+@router.post("/auth/change-password")
+def change_password(request: PasswordChangeRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    if not verify_password(request.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect current password")
+    
+    if len(request.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters long")
+        
+    current_user.hashed_password = pwd_context.hash(request.new_password)
+    current_user.requires_password_change = False
+    db.commit()
+    
+    return {"message": "Password updated successfully. Network secured."}

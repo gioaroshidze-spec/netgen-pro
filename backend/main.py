@@ -28,20 +28,26 @@ app = FastAPI(title="VNMS Central API", version="1.0", lifespan=lifespan)
 # Setup CORS for the React Frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    # --- SECURED: Only allow local Vite Dev Server ports (You will change this in prod) ---
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- NEW: CREATE DEFAULT ADMIN USER ON STARTUP ---
+# --- SECURED: CREATE DEFAULT ADMIN USER ON STARTUP ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 db = SessionLocal()
 admin_exists = db.query(models.User).filter(models.User.username == "admin").first()
 if not admin_exists:
     print("Creating default admin user...")
     hashed_pw = pwd_context.hash("admin") # Default password is 'admin'
-    default_admin = models.User(username="admin", hashed_password=hashed_pw, role="admin")
+    default_admin = models.User(
+        username="admin", 
+        hashed_password=hashed_pw, 
+        role="admin",
+        requires_password_change=True # <-- THIS TRIGGERS THE TRAP
+    )
     db.add(default_admin)
     db.commit()
 db.close()
