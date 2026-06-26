@@ -6,9 +6,6 @@ import { NodeResizer } from '@reactflow/node-resizer';
 import '@reactflow/node-resizer/dist/style.css';
 import 'reactflow/dist/style.css';
 
-// ==========================================
-// --- CUSTOM NODE: DEVICES ---
-// ==========================================
 const CustomDeviceNode = ({ data }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imgError, setImgError] = useState(false); 
@@ -56,9 +53,6 @@ const CustomDeviceNode = ({ data }) => {
 };
 CustomDeviceNode.propTypes = { data: PropTypes.object.isRequired };
 
-// ==========================================
-// --- CUSTOM NODE: ZONES ---
-// ==========================================
 const CustomZoneNode = ({ data, selected }) => {
   return (
     <>
@@ -70,9 +64,6 @@ const CustomZoneNode = ({ data, selected }) => {
   );
 };
 
-// ==========================================
-// --- CUSTOM EDGE: CABLES ---
-// ==========================================
 const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, markerEnd, data }) => {
   const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition });
   let shouldFlip = (sourceX > targetX) || (sourceX === targetX && sourceY > targetY);
@@ -89,9 +80,6 @@ const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
 CustomEdge.propTypes = { id: PropTypes.string, sourceX: PropTypes.number, sourceY: PropTypes.number, targetX: PropTypes.number, targetY: PropTypes.number, sourcePosition: PropTypes.string, targetPosition: PropTypes.string, style: PropTypes.object, markerEnd: PropTypes.string, data: PropTypes.object };
 
 
-// ==========================================
-// --- MAIN TOPOLOGY CANVAS ENGINE ---
-// ==========================================
 export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus, orgData }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -147,7 +135,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     else { setSelectedZones(prev => [...new Set([...prev, ...bldgZoneIds])]); }
   };
 
-  // --- THE FIX: ADD VIEW UPDATING AND EXTRACT ZONE WIDTH/HEIGHT ---
   const handleSaveView = () => {
     if (!newViewName) return alert("Please enter a name for your view.");
     const currentCoords = {};
@@ -176,7 +163,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
     
-    // Smooth update: Delete old, POST new with same name
     fetch(`http://127.0.0.1:8000/topology/views/${activeView.id}`, { method: 'DELETE', headers })
     .then(() => fetch('http://127.0.0.1:8000/topology/views', { method: 'POST', headers, body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) }))
     .then(res => res.json())
@@ -199,7 +185,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     setSelectedZones(view.zone_ids);
   };
 
-  // --- MAP RENDERER LOOP ---
   useEffect(() => {
     fetch('http://127.0.0.1:8000/topology/edges', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => res.ok ? res.json() : [])
@@ -207,7 +192,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       let savedGhostPositions = {};
       let savedZoneGeometries = {};
       try { savedGhostPositions = JSON.parse(localStorage.getItem('vnms_ghost_positions') || '{}'); } catch (e) {}
-      try { savedZoneGeometries = JSON.parse(localStorage.getItem('vnms_zone_geometries') || '{}'); } catch (e) {} // <-- NEW: Load Global Zone Sizes
+      try { savedZoneGeometries = JSON.parse(localStorage.getItem('vnms_zone_geometries') || '{}'); } catch (e) {} 
 
       const visibleZoneIds = [...new Set(devices.map(d => d.zone_id || -1))].filter(z => selectedZones.includes(z));
       let currentNodes = [];
@@ -222,7 +207,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         const defW = savedZoneGeometries[boxId]?.width ?? 400;
         const defH = savedZoneGeometries[boxId]?.height ?? 400;
 
-        // Apply saved view size, or fall back to global local storage
         let spawnX = activeView?.coordinates?.[boxId]?.x ?? defX;
         let spawnY = activeView?.coordinates?.[boxId]?.y ?? defY;
         let zWidth = activeView?.coordinates?.[boxId]?.width ?? defW;
@@ -321,7 +305,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     });
 
     localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
-    localStorage.setItem('vnms_zone_geometries', JSON.stringify(zoneGeometries)); // <-- NEW: Saves Zone Resizing Globally
+    localStorage.setItem('vnms_zone_geometries', JSON.stringify(zoneGeometries)); 
 
     fetch('http://127.0.0.1:8000/topology/update-coordinates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify(coordinates) })
     .then(async res => { if (!res.ok) { const err = await res.json(); throw new Error(err.detail); } return res.json(); })
@@ -329,7 +313,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(err => { console.error(err); alert(`❌ Failed: ${err.message}`); setIsSaving(false); });
   };
 
-  const handleDiscovery = () => { setIsDiscovering(true); fetch(`http://127.0.0.1:8000/topology/discover`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(res => res.json()).then(() => { alert("Discovery Engine launched."); setIsDiscovering(false); }).catch(() => setIsDiscovering(false)); };
+  const handleDiscovery = () => { setIsDiscovering(true); fetch(`http://127.0.0.1:8000/topology/discover`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(res => res.json()).then(() => { alert("Discovery Engine launched. Map will refresh shortly."); setIsDiscovering(false); }).catch(() => setIsDiscovering(false)); };
   const handleReboot = () => { if (!selectedDevice || !window.confirm(`⚠️ Reboot ${selectedDevice.hostname}?`)) return; setIsRebooting(true); fetch(`http://127.0.0.1:8000/device/${selectedDevice.id}/reboot`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(() => { alert("Reboot queued."); setIsRebooting(false); setSelectedDevice(null); }).catch(() => setIsRebooting(false)); };
   const handlePortAction = (hostname, port, action) => { if (!window.confirm(`⚠️ ${action.toUpperCase()} port ${port}?`)) return; setBouncingPort(`${hostname}-${port}`); fetch('http://127.0.0.1:8000/topology/port-action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ hostname, port, action }) }).then(res => res.json()).then(data => { alert(`✅ ${data.message}`); setBouncingPort(null); }).catch(err => { alert(`❌ Error: ${err.message}`); setBouncingPort(null); }); };
   const handlePcap = (targetDev, targetPort) => { if(!targetDev) return; const url = `http://127.0.0.1:8000/topology/pcap?device_id=${targetDev.id}&port=${encodeURIComponent(targetPort)}&token=${localStorage.getItem('token')}`; window.open(url, `pcap_${targetDev.id}`, `width=800,height=600`); };
@@ -337,14 +321,12 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 120px)', position: 'relative', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
       
-      {/* --- LEFT SIDEBAR FOR ORGANIZATION & VIEWS --- */}
       {showOrgSidebar && (
         <div style={{ width: '320px', backgroundColor: '#252526', borderRight: '1px solid #333', display: 'flex', flexDirection: 'column', zIndex: 5 }}>
           <div style={{ padding: '20px', flex: 1, overflowY: 'auto' }}>
             
             <h4 style={{ margin: '0 0 10px 0', color: '#fff', fontSize: '0.9rem', textTransform: 'uppercase', letterSpacing: '1px' }}>Saved Views</h4>
             
-            {/* NEW: UPDATE ACTIVE VIEW BUTTON */}
             {activeView && (
               <button onClick={handleUpdateActiveView} style={{ width: '100%', padding: '10px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '15px', boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
                 💾 Update "{activeView.name}"
@@ -411,7 +393,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         </div>
       )}
 
-      {/* --- REACT FLOW CANVAS --- */}
       <div style={{ flex: 1, backgroundColor: '#1e1e1e', position: 'relative' }}>
         <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView attributionPosition="bottom-left">
           <Background color="#333" gap={20} />
@@ -429,7 +410,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         </div>
       </div>
 
-      {/* --- RIGHT SIDEBAR: NODE / EDGE PANELS --- */}
       <div style={{ width: '320px', backgroundColor: '#252526', borderLeft: '1px solid #333', padding: '20px', display: 'flex', flexDirection: 'column', position: 'absolute', right: (selectedDevice || selectedEdge) ? '0' : '-320px', top: 0, bottom: 0, transition: 'right 0.3s ease', boxShadow: '-5px 0 15px rgba(0,0,0,0.5)', overflowY: 'auto' }}>
         {selectedDevice && (
           <>
@@ -466,14 +446,14 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
               <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'shutdown')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ padding: '8px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>🔴 Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>🟢 No Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.source, selectedEdge.data.source_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.source}-${selectedEdge.data.source_port}` || userRole !== 'admin'} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: userRole === 'admin' ? 'pointer' : 'not-allowed', fontWeight: 'bold' }}>⚡ Bounce Port</button>
-              <button onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.source), selectedEdge.data.source_port)} disabled={!devices.find(d => d.hostname === selectedEdge.source)} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.source) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px' }}>🕵️‍♂️ Packet Trace</button>
+              <button onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.source), selectedEdge.data.source_port)} disabled={!devices.find(d => d.hostname === selectedEdge.source) || devices.find(d => d.hostname === selectedEdge.source)?.os_type !== 'cisco'} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.source) && devices.find(d => d.hostname === selectedEdge.source)?.os_type === 'cisco' ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px', opacity: devices.find(d => d.hostname === selectedEdge.source) && devices.find(d => d.hostname === selectedEdge.source)?.os_type === 'cisco' ? 1 : 0.5 }}>🕵️‍♂️ Packet Trace (Cisco Only)</button>
             </div>
             <h4 style={{ color: '#888', borderBottom: '1px solid #444', paddingBottom: '5px', marginBottom: '15px' }}>Port Ops: {selectedEdge.target}</h4>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '20px' }}>
               <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'shutdown')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ padding: '8px', backgroundColor: '#f4433622', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🔴 Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'no_shutdown')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ padding: '8px', backgroundColor: '#4caf5022', color: '#4caf50', border: '1px solid #4caf50', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🟢 No Shut</button>
               <button onClick={() => handlePortAction(selectedEdge.target, selectedEdge.data.target_port, 'bounce')} disabled={bouncingPort === `${selectedEdge.target}-${selectedEdge.data.target_port}` || userRole !== 'admin' || !devices.find(d => d.hostname === selectedEdge.target)} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#1e1e1e', color: '#e6a23c', border: '1px solid #e6a23c', borderRadius: '4px', cursor: (userRole === 'admin' && devices.find(d => d.hostname === selectedEdge.target)) ? 'pointer' : 'not-allowed', fontWeight: 'bold', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>⚡ Bounce Port</button>
-              <button onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.target), selectedEdge.data.target_port)} disabled={!devices.find(d => d.hostname === selectedEdge.target)} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.target) ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px', opacity: !devices.find(d => d.hostname === selectedEdge.target) ? 0.5 : 1 }}>🕵️‍♂️ Packet Trace</button>
+              <button onClick={() => handlePcap(devices.find(d => d.hostname === selectedEdge.target), selectedEdge.data.target_port)} disabled={!devices.find(d => d.hostname === selectedEdge.target) || devices.find(d => d.hostname === selectedEdge.target)?.os_type !== 'cisco'} style={{ gridColumn: '1 / -1', padding: '8px', backgroundColor: '#007acc', color: '#fff', border: 'none', borderRadius: '4px', cursor: devices.find(d => d.hostname === selectedEdge.target) && devices.find(d => d.hostname === selectedEdge.target)?.os_type === 'cisco' ? 'pointer' : 'not-allowed', fontWeight: 'bold', marginTop: '5px', opacity: !devices.find(d => d.hostname === selectedEdge.target) || devices.find(d => d.hostname === selectedEdge.target)?.os_type !== 'cisco' ? 0.5 : 1 }}>🕵️‍♂️ Packet Trace (Cisco Only)</button>
             </div>
           </>
         )}

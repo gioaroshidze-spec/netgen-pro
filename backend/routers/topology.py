@@ -195,16 +195,38 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
                     "memory": f"{mem.group(1).strip()} Free" if mem else "Unknown",
                     "uptime": uptime.group(1).strip() if uptime else "Active"
                 }
+            
             elif device.os_type == 'cisco':
+                # 1. CPU Load (5-minute average)
                 cpu_out = net_connect.send_command("show processes cpu | include CPU utilization")
-                cpu = cpu_out.split("five minutes:")[-1].strip() if "five minutes:" in cpu_out else "Nominal"
-                return {"cpu": cpu, "memory": "CLI Only", "uptime": "Active"}
+                cpu_match = re.search(r'five minutes:\s*([0-9]+%)', cpu_out)
+                cpu = cpu_match.group(1) if cpu_match else "Unknown"
+
+                # 2. Memory Utilization
+                mem_out = net_connect.send_command("show processes memory | include Processor")
+                mem_match = re.search(r'Total:\s+(\d+)\s+Used:\s+(\d+)', mem_out)
+                if mem_match:
+                    total_mem = int(mem_match.group(1))
+                    used_mem = int(mem_match.group(2))
+                    mem_pct = round((used_mem / total_mem) * 100)
+                    memory = f"{mem_pct}% Used"
+                else:
+                    memory = "Unknown"
+
+                # 3. Exact Uptime
+                up_out = net_connect.send_command("show version | include uptime")
+                up_match = re.search(r'uptime is (.*)', up_out)
+                uptime = up_match.group(1).strip() if up_match else "Active"
+
+                return {"cpu": cpu, "memory": memory, "uptime": uptime}
+            
             else:
                 return {"cpu": "SNMP Req", "memory": "SNMP Req", "uptime": "Active"}
 
     except Exception as e:
         return {"cpu": "Timeout", "memory": "Timeout", "uptime": "Timeout"}
-
+    
+    
 # ==========================================
 # --- EPC PACKET CAPTURE ENGINE ---
 # ==========================================
