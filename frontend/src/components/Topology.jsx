@@ -89,6 +89,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
   const [bouncingPort, setBouncingPort] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(false)
 
   const [showOrgSidebar, setShowOrgSidebar] = useState(true);
   
@@ -117,6 +118,43 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   const handleZoneToggle = (zoneId) => {
     setActiveView(null); 
     setSelectedZones(prev => prev.includes(zoneId) ? prev.filter(z => z !== zoneId) : [...prev, zoneId]);
+  };
+
+  const onConnect = useCallback((params) => {
+    if (userRole !== 'admin') return alert("Only admins can map manual links.");
+    
+    const sourcePort = window.prompt(`Enter the outbound port for ${params.source} (e.g., Gig1/0/2):`);
+    if (!sourcePort) return;
+    const targetPort = window.prompt(`Enter the inbound port for ${params.target} (e.g., ether1):`);
+    if (!targetPort) return;
+    
+    fetch('http://127.0.0.1:8000/topology/edges/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+      body: JSON.stringify({
+        source_hostname: params.source,
+        target_hostname: params.target,
+        source_port: sourcePort,
+        target_port: targetPort
+      })
+    })
+    .then(async res => {
+      if(!res.ok) throw new Error("Failed to add manual link");
+      setRefreshTrigger(prev => !prev); // Triggers the map to redraw!
+    })
+    .catch(err => alert(err.message));
+  }, [userRole]);
+
+  const handleDeleteManualEdge = (edgeId) => {
+    if(!window.confirm("Delete this manual link?")) return;
+    fetch(`http://127.0.0.1:8000/topology/edges/${edgeId}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    })
+    .then(() => {
+      setSelectedEdge(null);
+      setRefreshTrigger(prev => !prev);
+    });
   };
 
   const handleFloorToggle = (floor) => {
@@ -242,10 +280,16 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         if (activeNodeIds.has(edge.source_hostname) && activeNodeIds.has(edge.target_hostname)) {
           const isBlocked = edge.link_type.includes('_blocked');
           const baseLinkType = edge.link_type.replace('_blocked', '');
+          const isManual = edge.link_type === 'manual'; // <-- Identify manual links
           formattedEdges.push({
             id: `e-${edge.id}`, source: edge.source_hostname, target: edge.target_hostname, type: 'customEdge', 
-            data: { source_port: edge.source_port, target_port: edge.target_port, utilization: edge.current_utilization, original_stroke: baseLinkType === 'trunk' ? '#007acc' : '#777' },
-            style: { stroke: isBlocked ? '#555' : (baseLinkType === 'trunk' ? '#007acc' : '#777'), strokeWidth: baseLinkType === 'trunk' ? 3 : 1.5, strokeDasharray: isBlocked ? '5, 5' : 'none', opacity: isBlocked ? 0.5 : 1 },
+            data: { source_port: edge.source_port, target_port: edge.target_port, utilization: edge.current_utilization, original_stroke: baseLinkType === 'trunk' ? '#007acc' : '#777', link_type: edge.link_type },
+            style: { 
+              stroke: isBlocked ? '#555' : (baseLinkType === 'trunk' ? '#007acc' : '#777'), 
+              strokeWidth: baseLinkType === 'trunk' ? 3 : 1.5, 
+              strokeDasharray: isBlocked ? '5, 5' : (isManual ? '10, 5' : 'none'), // Dotted line for manual links
+              opacity: isBlocked ? 0.5 : 1 
+            },
           });
         } else if (activeNodeIds.has(edge.source_hostname) && !devices.find(d => d.hostname === edge.target_hostname)) {
            if (!currentNodes.find(n => n.id === edge.target_hostname)) {
@@ -261,7 +305,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       setEdges(formattedEdges);
     })
     .catch(err => console.error("Failed to load edges:", err));
-  }, [devices, selectedZones, orgData, activeView]);
+  }, [devices, selectedZones, orgData, activeView, refreshTrigger]);
 
   const onLayout = useCallback(() => {
     const dagreGraph = new dagre.graphlib.Graph();
@@ -394,7 +438,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       )}
 
       <div style={{ flex: 1, backgroundColor: '#1e1e1e', position: 'relative' }}>
-        <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView attributionPosition="bottom-left">
+        <ReactFlow nodes={nodes} edges={edges} onConnect={onConnect} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick} nodeTypes={nodeTypes} edgeTypes={edgeTypes} fitView attributionPosition="bottom-left">
           <Background color="#333" gap={20} />
           <Controls style={{ backgroundColor: '#252526', fill: '#fff' }} />
           <MiniMap nodeColor="#007acc" maskColor="rgba(0,0,0,0.5)" style={{ backgroundColor: '#252526' }} />
@@ -435,6 +479,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
               <h3 style={{ margin: 0, color: '#fff' }}>Link Interconnect</h3><button onClick={() => setSelectedEdge(null)} style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer', fontSize: '1.2rem' }}>✖</button>
             </div>
             <div style={{ backgroundColor: '#1a1a1a', padding: '15px', borderRadius: '6px', marginBottom: '30px', border: '1px solid #333' }}>
+              {selectedEdge.data?.link_type === 'manual' && (
+              <button onClick={() => handleDeleteManualEdge(selectedEdge.id.replace('e-', ''))} style={{ width: '100%', padding: '10px', backgroundColor: 'transparent', color: '#f44336', border: '1px solid #f44336', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', marginBottom: '15px' }}>
+                ✂️ Delete Manual Link
+              </button>
+            )}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ textAlign: 'left', maxWidth: '40%' }}><strong style={{ color: '#007acc', display: 'block', fontSize: '1.1rem', wordBreak: 'break-all' }}>{selectedEdge.source}</strong><span style={{ fontFamily: 'monospace', color: '#4caf50', fontSize: '0.85rem' }}>{selectedEdge.data?.source_port}</span></div>
                 <div style={{ flex: 1, borderBottom: '2px dashed #555', margin: '0 10px', position: 'relative', top: '-5px' }}><span style={{ position: 'absolute', top: '-18px', left: '50%', transform: 'translateX(-50%)', fontSize: '0.75rem', color: '#aaa', whiteSpace: 'nowrap', backgroundColor: '#1a1a1a', padding: '0 5px' }}>{selectedEdge.data?.utilization}% Util</span></div>

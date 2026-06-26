@@ -15,11 +15,39 @@ from netmiko import ConnectHandler, file_transfer
 from logger import log_event
 from routers.auth import decrypt_secret
 
+class ManualEdgeCreate(BaseModel):
+    source_hostname: str
+    target_hostname: str
+    source_port: str
+    target_port: str
+
 router = APIRouter(tags=["Topology & Power"])
 
 @router.get("/topology/edges", response_model=List[schemas.EdgeResponse])
 def get_topology_edges(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return db.query(models.TopologyEdge).all()
+
+@router.post("/topology/edges/manual")
+def create_manual_edge(edge: ManualEdgeCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    db_edge = models.TopologyEdge(
+        source_hostname=edge.source_hostname,
+        source_port=edge.source_port,
+        target_hostname=edge.target_hostname,
+        target_port=edge.target_port,
+        link_type="manual",
+        current_utilization=0.0
+    )
+    db.add(db_edge)
+    db.commit()
+    return {"message": "Manual link added."}
+
+@router.delete("/topology/edges/{edge_id}")
+def delete_edge(edge_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    edge = db.query(models.TopologyEdge).filter(models.TopologyEdge.id == edge_id).first()
+    if not edge: raise HTTPException(status_code=404)
+    db.delete(edge)
+    db.commit()
+    return {"message": "Edge deleted."}
 
 @router.post("/topology/update-coordinates")
 def update_coordinates(nodes: List[schemas.CoordinateUpdate], db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
@@ -145,8 +173,10 @@ def background_discovery(username: str):
         existing_map = {make_key(e): e for e in existing_edges}
         new_map = {make_key(e): e for e in new_edges_list}
         
+# Spare manual links from being deleted by the automated sweep!
         for key, edge in existing_map.items():
-            if key not in new_map: db.delete(edge)
+            if edge.link_type != "manual" and key not in new_map: 
+                db.delete(edge)
                 
         for key, edge in new_map.items():
             if key not in existing_map: db.add(edge)
@@ -226,7 +256,7 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
     except Exception as e:
         return {"cpu": "Timeout", "memory": "Timeout", "uptime": "Timeout"}
     
-    
+
 # ==========================================
 # --- EPC PACKET CAPTURE ENGINE ---
 # ==========================================
