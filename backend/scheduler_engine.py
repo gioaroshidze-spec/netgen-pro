@@ -15,6 +15,9 @@ import models
 from logger import log_event
 from ansible_engine import run_ansible_playbook
 
+# --- THE FIX: IMPORT DECRYPTER FOR AUTOMATED JOBS ---
+from routers.auth import decrypt_secret
+
 # Initialize the APScheduler
 scheduler = BackgroundScheduler()
 ARCHIVE_DIR = "archive"
@@ -27,7 +30,6 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
         if not job or not job.is_active:
             return
 
-        # Determine the execution context
         exec_type = "Manual Run" if manual_run_by else "Automated Schedule"
         triggered_by = manual_run_by if manual_run_by else "Cron/Timer"
 
@@ -41,26 +43,47 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             return
 
         # ==========================================
-        # 1. EXECUTE BACKUP JOB
+        # 1. EXECUTE BACKUP JOB (MULTI-VENDOR UPGRADE)
         # ==========================================
         if job.job_type == 'backup':
             success_count = 0
             for device in targets:
                 try:
-                    netmiko_os = 'hp_procurve' if device.os_type in ['aruba', 'hpe'] else 'cisco_ios'
+                    netmiko_os = 'cisco_ios'
+                    show_cmd = "show running-config"
+                    
+                    if device.os_type == 'mikrotik': 
+                        netmiko_os = 'mikrotik_routeros'
+                        show_cmd = "/export"
+                    elif device.os_type in ['hpe', 'aruba']: 
+                        netmiko_os = 'hp_procurve'
+                    elif device.os_type in ['alcatel', 'alcatel-lucent']: 
+                        netmiko_os = 'alcatel_aos'
+                        show_cmd = "show configuration snapshot"
+
                     connection_params = {
                         'device_type': netmiko_os, 'host': device.ip_address,
-                        'username': device.username, 'password': os.getenv("DEVICE_PASSWORD", "Werfds123"),
+                        'username': device.username, 'password': decrypt_secret(device.encrypted_password),
+                        'fast_cli': True
                     }
+                    
                     with ConnectHandler(**connection_params) as net_connect:
-                        net_connect.enable()
+                        if device.os_type != 'mikrotik':
+                            try: net_connect.enable()
+                            except: pass
                         
-                        if job.job_payload.get('save_nvram'): net_connect.save_config()
+                        if job.job_payload.get('save_nvram') and device.os_type != 'mikrotik': 
+                            try: net_connect.save_config()
+                            except: pass
+                            
                         if job.job_payload.get('save_flash'):
-                            net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
+                            if device.os_type == 'cisco':
+                                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
+                            elif device.os_type == 'mikrotik':
+                                net_connect.send_command("/export file=VNMS_Last_Good")
                         
-                        raw_config = net_connect.send_command("show running-config")
-                        clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration")]
+                        raw_config = net_connect.send_command(show_cmd)
+                        clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                         config = "\n".join(clean_lines)
 
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -73,16 +96,15 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
                 except Exception as e:
                     print(f"[SCHEDULER] Error backing up {device.hostname}: {e}")
 
-            # ALWAYS log as "System", but put the forensic data in the details!
             log_event(
                 db=db, event_type="Maintenance", severity="INFO" if success_count > 0 else "ERROR", 
-                author="System",  # <--- FIXED
+                author="System",
                 target_devices=job.target_devices,
                 details={
                     "action": "Scheduled Backup Executed", 
                     "execution_type": exec_type, 
-                    "triggered_by": triggered_by,  # <--- Added to show who clicked Run Now
-                    "scheduled_by": job.created_by, # <--- Shows who originally created the job
+                    "triggered_by": triggered_by,
+                    "scheduled_by": job.created_by,
                     "job_name": job.name, 
                     "success_count": success_count
                 }
@@ -100,7 +122,7 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
                 db=db,
                 prompt=prompt_audit,
                 is_check_mode=False,
-                author="System"  # <--- FIXED
+                author="System"
             )
             
             output_logs = ""
@@ -124,8 +146,8 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             db.commit()
     finally:
         db.close()
+
 def sync_jobs_to_scheduler():
-    """Reads the database and loads all active jobs into the APScheduler clock."""
     scheduler.remove_all_jobs()
     db = SessionLocal()
     
@@ -134,7 +156,6 @@ def sync_jobs_to_scheduler():
         for job in active_jobs:
             job_id_str = f"job_{job.id}"
             
-            # Determine Trigger Type
             if job.run_once_time:
                 trigger = DateTrigger(run_date=job.run_once_time)
             elif job.interval_hours:
@@ -161,14 +182,11 @@ def sync_jobs_to_scheduler():
 
 def start_scheduler():
     sync_jobs_to_scheduler()
-    
-    # --- NEW: Permanent System Discovery Sweep (1 Hour) ---
     scheduler.add_job(
         background_discovery,
         trigger=IntervalTrigger(hours=1),
-        args=["System_Scheduler"], # This sets the author in the Audit Logs!
+        args=["System_Scheduler"],
         id="system_topology_discovery",
         replace_existing=True
     )
-    
     scheduler.start()

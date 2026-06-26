@@ -12,7 +12,6 @@ import asyncio
 from typing import Optional
 from logger import log_event
 
-# --- IMPORT THE BOUNCERS ---
 from routers.auth import get_current_admin
 from routers.auth import decrypt_secret
 
@@ -22,29 +21,54 @@ router = APIRouter(tags=["Maintenance Operations"])
 ARCHIVE_DIR = "archive"
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
-# 7. Single Backup (POST) - SECURED
+# 7. Single Backup (POST) - MULTI-VENDOR
 @router.post("/backup-device/{device_id}")
 def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    if not device: raise HTTPException(status_code=404, detail="Device not found")
     
+    netmiko_os = 'cisco_ios'
+    show_cmd = "show running-config"
+    if device.os_type == 'mikrotik': 
+        netmiko_os = 'mikrotik_routeros'
+        show_cmd = "/export"
+    elif device.os_type in ['hpe', 'aruba']: 
+        netmiko_os = 'hp_procurve'
+    elif device.os_type in ['alcatel', 'alcatel-lucent']: 
+        netmiko_os = 'alcatel_aos'
+        show_cmd = "show configuration snapshot"
+
     connection_params = {
-        'device_type': 'cisco_ios', 'host': device.ip_address,
-        'username': device.username, 'password': decrypt_secret(device.encrypted_password)
+        'device_type': netmiko_os, 'host': device.ip_address,
+        'username': device.username,
+        'password': decrypt_secret(device.encrypted_password),
+        # --- THE FIX: FORGIVING TIMEOUTS FOR MIKROTIK ---
+        'fast_cli': False if device.os_type == 'mikrotik' else True, 
+        'conn_timeout': 20, 
+        'auth_timeout': 20,
+        'global_delay_factor': 2 if device.os_type == 'mikrotik' else 1
     }
 
     try:
         with ConnectHandler(**connection_params) as net_connect:
-            net_connect.enable()
+            if device.os_type != 'mikrotik':
+                try: net_connect.enable()
+                except: pass
+                
             config_data = ""
 
-            if options.save_nvram: net_connect.save_config()
+            if options.save_nvram and device.os_type != 'mikrotik': 
+                try: net_connect.save_config()
+                except: pass
+                
             if options.save_flash:
-                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
-                net_connect.send_command_timing("\n") 
+                if device.os_type == 'cisco':
+                    net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
+                elif device.os_type == 'mikrotik':
+                    net_connect.send_command("/export file=VNMS_Last_Good")
+                    
             if options.download_local or options.save_archive:
-                raw_config = net_connect.send_command("show running-config")
+                raw_config = net_connect.send_command(show_cmd)
                 clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                 config_data = "\n".join(clean_lines)
 
@@ -59,7 +83,6 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
             with open(archive_path, "w") as f:
                 f.write(config_data)
 
-        # Log with the exact admin user who did it
         log_event(
             db=db, event_type="Maintenance", severity="SUCCESS", author=current_user.username,
             target_devices=[device.hostname],
@@ -71,7 +94,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
         log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Single Backup Failed", "error": str(e)})
         raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
 
-# 8. Bulk Backup (POST) - SECURED
+# 8. Bulk Backup (POST) - MULTI-VENDOR
 @router.post("/bulk-backup")
 def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
     zip_buffer = io.BytesIO()
@@ -80,20 +103,46 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
         for dev_id in request.device_ids:
             device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == dev_id).first()
             if device:
+                netmiko_os = 'cisco_ios'
+                show_cmd = "show running-config"
+                if device.os_type == 'mikrotik': 
+                    netmiko_os = 'mikrotik_routeros'
+                    show_cmd = "/export"
+                elif device.os_type in ['hpe', 'aruba']: 
+                    netmiko_os = 'hp_procurve'
+                elif device.os_type in ['alcatel', 'alcatel-lucent']: 
+                    netmiko_os = 'alcatel_aos'
+                    show_cmd = "show configuration snapshot"
+
                 connection_params = {
-                    'device_type': 'cisco_ios', "host": device.ip_address,
-                    'username': device.username, 'password': decrypt_secret(device.encrypted_password)
+                    'device_type': netmiko_os, "host": device.ip_address,
+                    'username': device.username,
+                    'password': decrypt_secret(device.encrypted_password),
+                    # --- THE FIX: FORGIVING TIMEOUTS FOR MIKROTIK ---
+                    'fast_cli': False if device.os_type == 'mikrotik' else True, 
+                    'conn_timeout': 20, 
+                    'auth_timeout': 20,
+                    'global_delay_factor': 2 if device.os_type == 'mikrotik' else 1
                 }
+                
                 try:
                     with ConnectHandler(**connection_params) as net_connect:
-                        net_connect.enable()
-                        if request.options.save_nvram: net_connect.save_config()
+                        if device.os_type != 'mikrotik':
+                            try: net_connect.enable()
+                            except: pass
+                            
+                        if request.options.save_nvram and device.os_type != 'mikrotik': 
+                            try: net_connect.save_config()
+                            except: pass
+                            
                         if request.options.save_flash:
-                            net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg")
-                            net_connect.send_command_timing("\n")
+                            if device.os_type == 'cisco':
+                                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
+                            elif device.os_type == 'mikrotik':
+                                net_connect.send_command("/export file=VNMS_Last_Good")
                         
                         if request.options.download_local or request.options.save_archive:
-                            raw_config = net_connect.send_command("show running-config")
+                            raw_config = net_connect.send_command(show_cmd)
                             clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                             config = "\n".join(clean_lines)
                             
