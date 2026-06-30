@@ -140,7 +140,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     })
     .then(async res => {
       if(!res.ok) throw new Error("Failed to add manual link");
-      setRefreshTrigger(prev => !prev); // Triggers the map to redraw!
+      setRefreshTrigger(prev => !prev); 
     })
     .catch(err => alert(err.message));
   }, [userRole]);
@@ -280,21 +280,33 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
         if (activeNodeIds.has(edge.source_hostname) && activeNodeIds.has(edge.target_hostname)) {
           const isBlocked = edge.link_type.includes('_blocked');
           const baseLinkType = edge.link_type.replace('_blocked', '');
-          const isManual = edge.link_type === 'manual'; // <-- Identify manual links
+          const isManual = edge.link_type === 'manual'; 
           formattedEdges.push({
             id: `e-${edge.id}`, source: edge.source_hostname, target: edge.target_hostname, type: 'customEdge', 
             data: { source_port: edge.source_port, target_port: edge.target_port, utilization: edge.current_utilization, original_stroke: baseLinkType === 'trunk' ? '#007acc' : '#777', link_type: edge.link_type },
             style: { 
               stroke: isBlocked ? '#555' : (baseLinkType === 'trunk' ? '#007acc' : '#777'), 
               strokeWidth: baseLinkType === 'trunk' ? 3 : 1.5, 
-              strokeDasharray: isBlocked ? '5, 5' : (isManual ? '10, 5' : 'none'), // Dotted line for manual links
+              strokeDasharray: isBlocked ? '5, 5' : (isManual ? '10, 5' : 'none'), 
               opacity: isBlocked ? 0.5 : 1 
             },
           });
         } else if (activeNodeIds.has(edge.source_hostname) && !devices.find(d => d.hostname === edge.target_hostname)) {
            if (!currentNodes.find(n => n.id === edge.target_hostname)) {
-              const savedPos = savedGhostPositions[edge.target_hostname];
-              currentNodes.push({ id: edge.target_hostname, type: 'customDevice', position: { x: savedPos ? savedPos.x : 50 + (rogueOffset * 150), y: savedPos ? savedPos.y : 400 }, data: { label: edge.target_hostname, status: 'unmanaged', os: 'Unmanaged / Rogue', full_device: null } });
+              
+              // THE SURGICAL INCISION: Check activeView coordinates first, fallback to localStorage
+              const viewPos = activeView?.coordinates?.[edge.target_hostname];
+              const savedPos = viewPos || savedGhostPositions[edge.target_hostname];
+              
+              currentNodes.push({ 
+                  id: edge.target_hostname, 
+                  type: 'customDevice', 
+                  position: { 
+                      x: savedPos ? savedPos.x : 50 + (rogueOffset * 150), 
+                      y: savedPos ? savedPos.y : 400 
+                  }, 
+                  data: { label: edge.target_hostname, status: 'unmanaged', os: 'Unmanaged / Rogue', full_device: null } 
+              });
               rogueOffset++;
            }
            formattedEdges.push({ id: `e-${edge.id}`, source: edge.source_hostname, target: edge.target_hostname, type: 'customEdge', data: { source_port: edge.source_port, target_port: edge.target_port, utilization: 0, original_stroke: '#777' }, style: { stroke: '#777', strokeWidth: 1.5 } });

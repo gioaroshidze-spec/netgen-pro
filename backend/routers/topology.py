@@ -69,6 +69,13 @@ def background_discovery(username: str):
         devices = db.query(models.NetworkDevice).all()
         managed_hostnames = {d.hostname for d in devices}
         
+        # THE SURGICAL INCISION: Aggressive Normalization (strips hyphens, underscores, spaces)
+        def normalize_host(name: str):
+            if not name: return ""
+            return re.sub(r'[^a-z0-9]', '', name.lower())
+            
+        managed_hostnames_map = {normalize_host(d.hostname): d.hostname for d in devices}
+        
         processed_pairs = set()
         new_edges_list = []
 
@@ -89,10 +96,8 @@ def background_discovery(username: str):
                     # MIKROTIK DISCOVERY LOGIC
                     if device.os_type == 'mikrotik':
                         output = net_connect.send_command("/ip neighbor print detail")
-                        # Mikrotik blocks output by blocks. 
-                        # Look for interface="..." and identity="..." or sys-name="..."
                         blocks = output.split("-------------------")
-                        if len(blocks) < 2: blocks = output.split("\r\n\r\n") # Fallback split
+                        if len(blocks) < 2: blocks = output.split("\r\n\r\n")
                         
                         for block in blocks:
                             if not block.strip(): continue
@@ -104,7 +109,10 @@ def background_discovery(username: str):
                             local_intf = intf_match.group(1) if intf_match else None
                             
                             if remote_host and local_intf:
-                                remote_host = remote_host.split('.')[0] # Clean domain names
+                                remote_host = remote_host.split('.')[0]
+                                # Snap casing to database using normalized name
+                                remote_host = managed_hostnames_map.get(normalize_host(remote_host), remote_host)
+                                
                                 link_key = tuple(sorted([device.hostname, remote_host]))
                                 if link_key in processed_pairs: continue
                                 processed_pairs.add(link_key)
@@ -118,7 +126,6 @@ def background_discovery(username: str):
                     # ENTERPRISE OS DISCOVERY (Cisco, HPE, Aruba) -> LLDP & CDP
                     else:
                         net_connect.enable()
-                        # Try LLDP first (Enterprise Standard), fallback to CDP
                         output = net_connect.send_command("show lldp neighbors")
                         if "Invalid input" in output or "LLDP is not enabled" in output:
                             output = net_connect.send_command("show cdp neighbors")
@@ -126,31 +133,43 @@ def background_discovery(username: str):
                         lines = [line.strip() for line in output.splitlines() if line.strip()]
                         current_target = None
                         
+                        skip_keywords = [
+                            "Capability", "Device ID", "Total", "entries", "Local Intf", "Port ID",
+                            "S - Switch", "R - Router", "P - Phone", "H - Host", "I - IGMP", "D - Remote"
+                        ]
+                        
                         for line in lines:
-                            if "Capability" in line or "Device ID" in line or "Total" in line or "entries" in line or "Local Intf" in line:
+                            if line.startswith("%") or any(k in line for k in skip_keywords):
                                 continue
 
                             parts = re.split(r'\s+', line)
                             
-                            # Standard format: [Target] [LocalIntf] [Holdtime] [Capability] [PortID]
+                            if len(parts) == 1:
+                                current_target = parts[0]
+                                continue
+                            
                             if len(parts) >= 4:
-                                raw_target = parts[0]
-                                source_port = parts[1]
-                                target_port = parts[-1]
-                                
-                                # If the target name was too long and spilled to the next line
-                                if len(parts) == 1:
-                                    current_target = parts[0]
-                                    continue
                                 if current_target:
                                     raw_target = current_target
-                                    source_port = parts[0]
-                                    target_port = parts[-1]
-                                    current_target = None
-
-                                clean_target = raw_target.split('.')[0] # Strip domain
+                                    idx_local = 0
+                                else:
+                                    raw_target = parts[0]
+                                    idx_local = 1
                                 
-                                # De-Duplication
+                                source_port = parts[idx_local]
+                                if source_port.lower() in ["gig", "fas", "ten", "eth"] and len(parts) > idx_local + 1:
+                                    source_port = f"{parts[idx_local]}{parts[idx_local+1]}"
+                                    
+                                target_port = parts[-1]
+                                if len(parts) >= 2 and parts[-2].lower() in ["gig", "fas", "ten", "eth"]:
+                                    target_port = f"{parts[-2]}{parts[-1]}"
+                                    
+                                current_target = None
+
+                                clean_target = raw_target.split('.')[0]
+                                # Snap casing to database using normalized name
+                                clean_target = managed_hostnames_map.get(normalize_host(clean_target), clean_target)
+                                
                                 link_key = tuple(sorted([device.hostname, clean_target]))
                                 if link_key in processed_pairs: continue
                                 processed_pairs.add(link_key)
@@ -173,7 +192,6 @@ def background_discovery(username: str):
         existing_map = {make_key(e): e for e in existing_edges}
         new_map = {make_key(e): e for e in new_edges_list}
         
-# Spare manual links from being deleted by the automated sweep!
         for key, edge in existing_map.items():
             if edge.link_type != "manual" and key not in new_map: 
                 db.delete(edge)
@@ -227,12 +245,10 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
                 }
             
             elif device.os_type == 'cisco':
-                # 1. CPU Load (5-minute average)
                 cpu_out = net_connect.send_command("show processes cpu | include CPU utilization")
                 cpu_match = re.search(r'five minutes:\s*([0-9]+%)', cpu_out)
                 cpu = cpu_match.group(1) if cpu_match else "Unknown"
 
-                # 2. Memory Utilization
                 mem_out = net_connect.send_command("show processes memory | include Processor")
                 mem_match = re.search(r'Total:\s+(\d+)\s+Used:\s+(\d+)', mem_out)
                 if mem_match:
@@ -243,7 +259,6 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
                 else:
                     memory = "Unknown"
 
-                # 3. Exact Uptime
                 up_out = net_connect.send_command("show version | include uptime")
                 up_match = re.search(r'uptime is (.*)', up_out)
                 uptime = up_match.group(1).strip() if up_match else "Active"
