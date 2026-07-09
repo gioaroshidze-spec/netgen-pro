@@ -14,6 +14,8 @@ from logger import log_event
 
 from routers.auth import get_current_admin
 from routers.auth import decrypt_secret
+# --- THE SURGICAL INCISION: Import our central connection wrappers ---
+from connection_utils import get_netmiko_params, get_ansible_inventory_vars
 
 load_dotenv()
 
@@ -27,27 +29,11 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
     if not device: raise HTTPException(status_code=404, detail="Device not found")
     
-    netmiko_os = 'cisco_ios'
     show_cmd = "show running-config"
-    if device.os_type == 'mikrotik': 
-        netmiko_os = 'mikrotik_routeros'
-        show_cmd = "/export"
-    elif device.os_type in ['hpe', 'aruba']: 
-        netmiko_os = 'hp_procurve'
-    elif device.os_type in ['alcatel', 'alcatel-lucent']: 
-        netmiko_os = 'alcatel_aos'
-        show_cmd = "show configuration snapshot"
+    if device.os_type == 'mikrotik': show_cmd = "/export"
+    elif device.os_type in ['alcatel', 'alcatel-lucent']: show_cmd = "show configuration snapshot"
 
-    connection_params = {
-        'device_type': netmiko_os, 'host': device.ip_address,
-        'username': device.username,
-        'password': decrypt_secret(device.encrypted_password),
-        # --- THE FIX: FORGIVING TIMEOUTS FOR MIKROTIK ---
-        'fast_cli': False if device.os_type == 'mikrotik' else True, 
-        'conn_timeout': 20, 
-        'auth_timeout': 20,
-        'global_delay_factor': 2 if device.os_type == 'mikrotik' else 1
-    }
+    connection_params = get_netmiko_params(device)
 
     try:
         with ConnectHandler(**connection_params) as net_connect:
@@ -103,27 +89,11 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
         for dev_id in request.device_ids:
             device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == dev_id).first()
             if device:
-                netmiko_os = 'cisco_ios'
                 show_cmd = "show running-config"
-                if device.os_type == 'mikrotik': 
-                    netmiko_os = 'mikrotik_routeros'
-                    show_cmd = "/export"
-                elif device.os_type in ['hpe', 'aruba']: 
-                    netmiko_os = 'hp_procurve'
-                elif device.os_type in ['alcatel', 'alcatel-lucent']: 
-                    netmiko_os = 'alcatel_aos'
-                    show_cmd = "show configuration snapshot"
+                if device.os_type == 'mikrotik': show_cmd = "/export"
+                elif device.os_type in ['alcatel', 'alcatel-lucent']: show_cmd = "show configuration snapshot"
 
-                connection_params = {
-                    'device_type': netmiko_os, "host": device.ip_address,
-                    'username': device.username,
-                    'password': decrypt_secret(device.encrypted_password),
-                    # --- THE FIX: FORGIVING TIMEOUTS FOR MIKROTIK ---
-                    'fast_cli': False if device.os_type == 'mikrotik' else True, 
-                    'conn_timeout': 20, 
-                    'auth_timeout': 20,
-                    'global_delay_factor': 2 if device.os_type == 'mikrotik' else 1
-                }
+                connection_params = get_netmiko_params(device)
                 
                 try:
                     with ConnectHandler(**connection_params) as net_connect:
@@ -234,36 +204,65 @@ async def restore_devices(
                     else:
                         raise HTTPException(status_code=400, detail=f"Safety Abort: '{actual_filename}' does not match target '{dev.hostname}'.")
                     
+        # --- DYNAMIC MULTI-VENDOR INVENTORY ---
         inventory_path = os.path.join(tmpdir, "inventory.ini")
         with open(inventory_path, "w") as inv:
             inv.write("[targets]\n")
             for dev in devices:
                 target_file = extracted_files.get(dev.hostname, "")
                 if target_file:
-                    inv.write(
-                        f'{dev.hostname} ansible_host={dev.ip_address} ansible_user={dev.username} '
-                        f'ansible_password={decrypt_secret(dev.encrypted_password)} ansible_become=yes '
-                        f'ansible_become_method=enable ansible_network_os=cisco.ios.ios '
-                        f'ansible_connection=network_cli restore_file="{target_file}"\n'
-                    )
+                    vars_dict = get_ansible_inventory_vars(dev)
+                    # Convert the dict to an Ansible inline inventory string
+                    vars_string = " ".join([f'{k}="{v}"' if " " in str(v) else f'{k}={v}' for k, v in vars_dict.items()])
+                    inv.write(f'{dev.hostname} {vars_string} restore_file="{target_file}"\n')
 
+        # --- MULTI-VENDOR RESTORE PLAYBOOK ---
         playbook_path = os.path.join(tmpdir, "restore.yml")
         playbook_content = """
 ---
-- name: VNMS Full Configuration Restore via SCP
+- name: VNMS Multi-Vendor Configuration Restore
   hosts: targets
   gather_facts: no
   tasks:
-    - name: 1. Securely Transfer Backup File to Switch Flash
+    # --- CISCO IOS RESTORE ---
+    - name: (CISCO) Transfer Backup File
       ansible.netcommon.net_put:
         src: "{{ restore_file }}"
         dest: "flash:vnms_restore.cfg"
         protocol: scp
+      when: ansible_network_os == 'cisco.ios.ios'
 
-    - name: 2. Force Configuration Replace (Wipe and Mirror)
+    - name: (CISCO) Force Configuration Replace
       cisco.ios.ios_command:
         commands:
           - command: 'configure replace flash:vnms_restore.cfg force'
+      when: ansible_network_os == 'cisco.ios.ios'
+
+    # --- MIKROTIK ROUTEROS RESTORE ---
+    - name: (MIKROTIK) Transfer Backup File
+      ansible.netcommon.net_put:
+        src: "{{ restore_file }}"
+        dest: "vnms_restore.rsc"
+        protocol: scp
+      when: ansible_network_os == 'community.routeros.routeros'
+
+    - name: (MIKROTIK) Execute Import Script
+      community.routeros.command:
+        commands:
+          - "/import file-name=vnms_restore.rsc"
+      when: ansible_network_os == 'community.routeros.routeros'
+
+    # --- ARUBA / HPE PROVISION RESTORE ---
+    - name: (HPE/ARUBA) Push Full Config via Src
+      community.network.aruba_config:
+        src: "{{ restore_file }}"
+      when: ansible_network_os in ['community.network.aruba', 'arubanetworks.aoscx.aoscx']
+      
+    # --- ALCATEL AOS RESTORE ---
+    - name: (ALCATEL) Push Full Config
+      ansible.netcommon.cli_config:
+        config: "{{ lookup('file', restore_file) }}"
+      when: ansible_network_os == 'community.network.alcatel_aos'
 """
         with open(playbook_path, "w") as pb:
             pb.write(playbook_content)

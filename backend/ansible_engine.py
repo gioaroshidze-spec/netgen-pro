@@ -3,7 +3,8 @@ import subprocess
 import json
 import os
 from logger import log_event
-from routers.auth import decrypt_secret
+# --- THE SURGICAL INCISION: Import our central connection wrapper ---
+from connection_utils import get_ansible_inventory_vars
 
 def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution", is_check_mode=True, author="System"):
     """
@@ -25,27 +26,13 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
         inventory_data = {"all": {"hosts": {}}}
         os_types_present = set()
 
-        # 1. BUILD MULTI-VENDOR INVENTORY
+        # 1. BUILD MULTI-VENDOR INVENTORY USING CENTRAL WRAPPER
         for dev in devices:
             os_type = (dev.os_type or "cisco").lower()
             os_types_present.add(os_type)
             
-            # Map database OS string to the exact Ansible Network OS Collection
-            if os_type == "aruba": ansible_os = "arubanetworks.aoscx.aoscx"
-            elif os_type == "hpe": ansible_os = "community.network.aruba"
-            elif os_type == "mikrotik": ansible_os = "community.routeros.routeros"
-            elif os_type in ["alcatel", "alcatel-lucent"]: ansible_os = "community.network.alcatel_aos"
-            else: ansible_os = "cisco.ios.ios"
-            
-            inventory_data["all"]["hosts"][dev.hostname] = {
-                "ansible_host": dev.ip_address,
-                "ansible_network_os": ansible_os,
-                "ansible_connection": "network_cli",
-                "ansible_user": dev.username or "admin",
-                "ansible_password": decrypt_secret(dev.encrypted_password),
-                # We tell Ansible to ignore the strict host key checking (the yes/no prompt), but we rely on modern RSA keys now!
-                "ansible_ssh_common_args": "-o StrictHostKeyChecking=no"
-            }
+            # The wrapper handles the MikroTik +cte1024w trick and privilege escalation
+            inventory_data["all"]["hosts"][dev.hostname] = get_ansible_inventory_vars(dev)
         
         with open(inventory_path, 'w') as f:
             f.write("all:\n  hosts:\n")

@@ -15,8 +15,9 @@ import models
 from logger import log_event
 from ansible_engine import run_ansible_playbook
 
-# --- THE FIX: IMPORT DECRYPTER FOR AUTOMATED JOBS ---
 from routers.auth import decrypt_secret
+# --- THE SURGICAL INCISION: Import our central connection wrapper ---
+from connection_utils import get_netmiko_params
 
 # Initialize the APScheduler
 scheduler = BackgroundScheduler()
@@ -49,23 +50,15 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             success_count = 0
             for device in targets:
                 try:
-                    netmiko_os = 'cisco_ios'
                     show_cmd = "show running-config"
                     
                     if device.os_type == 'mikrotik': 
-                        netmiko_os = 'mikrotik_routeros'
                         show_cmd = "/export"
-                    elif device.os_type in ['hpe', 'aruba']: 
-                        netmiko_os = 'hp_procurve'
                     elif device.os_type in ['alcatel', 'alcatel-lucent']: 
-                        netmiko_os = 'alcatel_aos'
                         show_cmd = "show configuration snapshot"
 
-                    connection_params = {
-                        'device_type': netmiko_os, 'host': device.ip_address,
-                        'username': device.username, 'password': decrypt_secret(device.encrypted_password),
-                        'fast_cli': True
-                    }
+                    # Fetch standardized, safe connection parameters
+                    connection_params = get_netmiko_params(device)
                     
                     with ConnectHandler(**connection_params) as net_connect:
                         if device.os_type != 'mikrotik':
@@ -117,7 +110,7 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             prompt_audit = f"Scheduled Job: {job.name} | Type: {exec_type} | Triggered By: {triggered_by} | Originally Scheduled By: {job.created_by}"
             
             generator = run_ansible_playbook(
-                config_data=job.job_payload.get('template_config', {}),
+                ai_config_data=job.job_payload.get('template_config', {}),
                 devices=targets,
                 db=db,
                 prompt=prompt_audit,
