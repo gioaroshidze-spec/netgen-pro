@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import models
 from database import engine, SessionLocal
 from contextlib import asynccontextmanager
+import os
 
 # Import our routers and scheduler
 from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology, organization
@@ -25,11 +26,17 @@ async def lifespan(app: FastAPI):
 # Initialize FastAPI App
 app = FastAPI(title="VNMS Central API", version="1.0", lifespan=lifespan)
 
+# --- THE SURGICAL INCISION: Dynamic CORS Origins ---
+# Pulls a comma-separated list from the environment, falling back to local dev ports.
+cors_origins = os.getenv(
+    "VNMS_ALLOWED_ORIGINS", 
+    "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
+
 # Setup CORS for the React Frontend
 app.add_middleware(
     CORSMiddleware,
-    # --- SECURED: Only allow local Vite Dev Server ports (You will change this in prod) ---
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
+    allow_origins=cors_origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
