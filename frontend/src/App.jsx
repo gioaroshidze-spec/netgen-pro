@@ -94,7 +94,11 @@ function App() {
   }, [isAuthenticated])
 
   if (!isAuthenticated) {
-    return <Login onLoginSuccess={() => setIsAuthenticated(true)} />
+    return <Login onLoginSuccess={() => {
+      setIsAuthenticated(true);
+      setActiveTab('Dashboard'); // Force tab state to Dashboard
+      localStorage.setItem('vnmsActiveTab', 'Dashboard'); // Override memory
+    }} />
   }
 
   // =================================================================
