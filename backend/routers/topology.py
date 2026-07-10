@@ -4,6 +4,8 @@ import time
 import uuid
 import tempfile
 import threading
+import concurrent.futures
+from datetime import datetime, timezone
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -19,7 +21,7 @@ from routers.auth import decrypt_secret
 # --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_netmiko_params
 
-# --- NEW: Global Discovery Lock ---
+# --- Global Discovery Lock ---
 DISCOVERY_LOCK = threading.Lock()
 IS_DISCOVERING = False
 
@@ -75,7 +77,6 @@ def background_discovery(username: str):
     db = SessionLocal()
     
     try:
-        # Check and set the lock
         with DISCOVERY_LOCK:
             if IS_DISCOVERING:
                 print("[DISCOVERY ENGINE] Aborting: Discovery already in progress.")
@@ -84,25 +85,20 @@ def background_discovery(username: str):
             
         print("[DISCOVERY ENGINE] Starting Automated Enterprise Network Discovery...")
         devices = db.query(models.NetworkDevice).all()
-        managed_hostnames = {d.hostname for d in devices}
         
-        # Aggressive Normalization (strips hyphens, underscores, spaces)
         def normalize_host(name: str):
             if not name: return ""
             return re.sub(r'[^a-z0-9]', '', name.lower())
             
         managed_hostnames_map = {normalize_host(d.hostname): d.hostname for d in devices}
-        
         processed_pairs = set()
         new_edges_list = []
 
         for device in devices:
-            # Fetch standardized, safe connection parameters
             connection_params = get_netmiko_params(device)
 
             try:
                 with ConnectHandler(**connection_params) as net_connect:
-                    # MIKROTIK DISCOVERY LOGIC
                     if device.os_type == 'mikrotik':
                         output = net_connect.send_command("/ip neighbor print detail")
                         blocks = output.split("-------------------")
@@ -119,7 +115,6 @@ def background_discovery(username: str):
                             
                             if remote_host and local_intf:
                                 remote_host = remote_host.split('.')[0]
-                                # Snap casing to database using normalized name
                                 remote_host = managed_hostnames_map.get(normalize_host(remote_host), remote_host)
                                 
                                 link_key = tuple(sorted([device.hostname, remote_host]))
@@ -132,7 +127,6 @@ def background_discovery(username: str):
                                     link_type="ethernet", current_utilization=0.0
                                 ))
                     
-                    # ENTERPRISE OS DISCOVERY (Cisco, HPE, Aruba) -> LLDP & CDP
                     else:
                         try: net_connect.enable()
                         except: pass
@@ -177,7 +171,6 @@ def background_discovery(username: str):
                                 current_target = None
 
                                 clean_target = raw_target.split('.')[0]
-                                # Snap casing to database using normalized name
                                 clean_target = managed_hostnames_map.get(normalize_host(clean_target), clean_target)
                                 
                                 link_key = tuple(sorted([device.hostname, clean_target]))
@@ -193,7 +186,7 @@ def background_discovery(username: str):
                                 ))
 
             except Exception as e:
-                print(f"[DISCOVERY ENGINE] Failed to map {device.hostname} ({device.os_type}): {e}")
+                print(f"[DISCOVERY ENGINE] Failed to map {device.hostname}: {e}")
 
         # TRANSACTIONAL MERGE
         existing_edges = db.query(models.TopologyEdge).all()
@@ -216,7 +209,6 @@ def background_discovery(username: str):
         db.rollback()
         print(f"[DISCOVERY ENGINE] Fatal Error: {str(e)}")
     finally:
-        # Release the lock when finished or if it crashes
         with DISCOVERY_LOCK:
             IS_DISCOVERING = False
         db.close()
@@ -233,32 +225,36 @@ def trigger_discovery(background_tasks: BackgroundTasks, db: Session = Depends(g
 # ==========================================
 # --- ENTERPRISE TELEMETRY ENGINE ---
 # ==========================================
-@router.get("/topology/telemetry/{device_id}")
-def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
-    if not device: raise HTTPException(status_code=404, detail="Device not found")
-
+def fetch_and_cache_telemetry(device_id: int):
+    """
+    Background worker function that scrapes telemetry and updates the DB.
+    """
+    db = SessionLocal()
     try:
-        connection_params = get_netmiko_params(device)
-        connection_params['auth_timeout'] = 5
-        connection_params['banner_timeout'] = 5
+        device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+        if not device:
+            return
+            
+        params = get_netmiko_params(device)
+        params['timeout'] = 10
+        params['auth_timeout'] = 5
+        params['banner_timeout'] = 5
         
-        with ConnectHandler(**connection_params) as net_connect:
+        with ConnectHandler(**params) as net_connect:
             if device.os_type == 'mikrotik':
                 res = net_connect.send_command("/system resource print")
                 cpu = re.search(r'cpu-load:\s+(\d+%)', res)
                 mem = re.search(r'free-memory:\s+(.*)', res)
                 uptime = re.search(r'uptime:\s+(.*)', res)
-                return {
-                    "cpu": cpu.group(1) if cpu else "Unknown",
-                    "memory": f"{mem.group(1).strip()} Free" if mem else "Unknown",
-                    "uptime": uptime.group(1).strip() if uptime else "Active"
-                }
+                
+                device.last_cpu = cpu.group(1) if cpu else "Unknown"
+                device.last_ram = f"{mem.group(1).strip()} Free" if mem else "Unknown"
+                device.last_uptime = uptime.group(1).strip() if uptime else "Active"
             
             elif device.os_type == 'cisco':
                 cpu_out = net_connect.send_command("show processes cpu | include CPU utilization")
                 cpu_match = re.search(r'five minutes:\s*([0-9]+%)', cpu_out)
-                cpu = cpu_match.group(1) if cpu_match else "Unknown"
+                device.last_cpu = cpu_match.group(1) if cpu_match else "Unknown"
 
                 mem_out = net_connect.send_command("show processes memory | include Processor")
                 mem_match = re.search(r'Total:\s+(\d+)\s+Used:\s+(\d+)', mem_out)
@@ -266,21 +262,64 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
                     total_mem = int(mem_match.group(1))
                     used_mem = int(mem_match.group(2))
                     mem_pct = round((used_mem / total_mem) * 100)
-                    memory = f"{mem_pct}% Used"
+                    device.last_ram = f"{mem_pct}% Used"
                 else:
-                    memory = "Unknown"
+                    device.last_ram = "Unknown"
 
                 up_out = net_connect.send_command("show version | include uptime")
                 up_match = re.search(r'uptime is (.*)', up_out)
-                uptime = up_match.group(1).strip() if up_match else "Active"
-
-                return {"cpu": cpu, "memory": memory, "uptime": uptime}
+                device.last_uptime = up_match.group(1).strip() if up_match else "Active"
             
             else:
-                return {"cpu": "SNMP Req", "memory": "SNMP Req", "uptime": "Active"}
+                device.last_cpu = "SNMP Req"
+                device.last_ram = "SNMP Req"
+                device.last_uptime = "Active"
 
-    except Exception as e:
-        return {"cpu": "Timeout", "memory": "Timeout", "uptime": "Timeout"}
+        device.telemetry_updated_at = datetime.now(timezone.utc)
+        db.commit()
+
+    except Exception:
+        # Silently fail for offline devices to avoid log bloat
+        pass
+    finally:
+        db.close()
+
+def telemetry_scheduler_loop():
+    """
+    Daemon thread that runs every 5 minutes and updates telemetry globally.
+    """
+    while True:
+        db = SessionLocal()
+        devices = db.query(models.NetworkDevice).all()
+        db.close()
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            for dev in devices:
+                executor.submit(fetch_and_cache_telemetry, dev.id)
+                
+        time.sleep(300)
+
+# Kick off the daemon thread automatically when this module is loaded
+threading.Thread(target=telemetry_scheduler_loop, daemon=True).start()
+
+
+@router.get("/topology/telemetry/{device_id}")
+def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    """
+    Lightning-fast DB query. Returns cached data instead of opening live SSH connections.
+    """
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    if not device: 
+        raise HTTPException(status_code=404, detail="Device not found")
+        
+    updated_at = device.telemetry_updated_at.strftime("%Y-%m-%d %H:%M:%S UTC") if getattr(device, "telemetry_updated_at", None) else "Never"
+
+    return {
+        "cpu": getattr(device, "last_cpu", "N/A"),
+        "memory": getattr(device, "last_ram", "N/A"),
+        "uptime": getattr(device, "last_uptime", "N/A"),
+        "last_updated": updated_at
+    }
     
 
 # ==========================================

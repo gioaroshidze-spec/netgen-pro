@@ -53,9 +53,15 @@ class NetworkDevice(Base):
     pos_x = Column(Float, default=100.0)       
     pos_y = Column(Float, default=100.0)       
     
-    # --- NEW: RELATIONAL ZONE ID ---
+    # --- RELATIONAL ZONE ID ---
     zone_id = Column(Integer, ForeignKey("zones.id", ondelete="SET NULL"), nullable=True)
     zone = relationship("Zone", back_populates="devices")
+
+    # --- NEW: TELEMETRY CACHING ---
+    last_cpu = Column(String, default="N/A")
+    last_ram = Column(String, default="N/A")
+    last_uptime = Column(String, default="N/A")
+    telemetry_updated_at = Column(DateTime, nullable=True)
 
 class TopologyEdge(Base):
     __tablename__ = "topology_edges"
@@ -115,13 +121,12 @@ class ScheduledJob(Base):
     last_run_status = Column(String, default="Pending")
     last_run_time = Column(DateTime, nullable=True)
 
-# Add this class to the bottom of your existing models.py
 class SavedTopologyView(Base):
     __tablename__ = "saved_topology_views"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
-    zone_ids = Column(JSON)      # List of integers representing checked zones
-    coordinates = Column(JSON)   # Dictionary of {hostname: {x: float, y: float}}
+    zone_ids = Column(JSON)      
+    coordinates = Column(JSON)   
     
     user = relationship("User")
