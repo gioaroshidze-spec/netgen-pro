@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Users() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -16,7 +19,7 @@ export default function Users() {
 
   const fetchUsers = () => {
     setIsLoading(true);
-    fetch('http://127.0.0.1:8000/auth/users', { headers: { 'Authorization': `Bearer ${token}` } })
+    fetch(`${API_BASE}/auth/users`, { headers: { 'Authorization': `Bearer ${token}` } })
       .then(res => res.json())
       .then(data => { setUsers(data); setIsLoading(false); })
       .catch(err => { console.error(err); setIsLoading(false); });
@@ -37,7 +40,7 @@ export default function Users() {
   const handleCreateUser = (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    fetch('http://127.0.0.1:8000/auth/users', {
+    fetch(`${API_BASE}/auth/users`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ username, password, role })
@@ -49,14 +52,14 @@ export default function Users() {
 
   const handleDeleteUser = (id) => {
     if (!window.confirm("Delete this user permanently?")) return;
-    fetch(`http://127.0.0.1:8000/auth/users/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } })
+    fetch(`${API_BASE}/auth/users/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } })
       .then(() => fetchUsers())
       .catch(err => alert("Failed to delete user."));
   };
 
   const handleResetPassword = (e, id) => {
     e.preventDefault();
-    fetch(`http://127.0.0.1:8000/auth/users/${id}/password`, {
+    fetch(`${API_BASE}/auth/users/${id}/password`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ new_password: newPassword })
@@ -67,7 +70,6 @@ export default function Users() {
 
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto', display: 'flex', gap: '30px', alignItems: 'flex-start' }}>
-      
       {/* Create User Panel */}
       <div style={{ flex: 1, backgroundColor: '#252526', padding: '25px', borderRadius: '8px', border: '1px solid #333' }}>
         <h3 style={{ marginTop: 0, color: '#007acc', borderBottom: '1px solid #444', paddingBottom: '10px' }}>Create New User</h3>

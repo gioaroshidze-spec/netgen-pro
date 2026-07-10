@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import SiteManager from './SiteManager'; 
 
-const API_URL = 'http://127.0.0.1:8000/device/';
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_URL = `${API_BASE}/device/`;
 
 export default function Inventory({ devices, fetchNetworkStatus, userRole, orgData, fetchOrgData }) {
   const [activeView, setActiveView] = useState('devices'); 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [editingId, setEditingId] = useState(null);
   
-  // --- UPDATED: Added password to default state ---
   const [formData, setFormData] = useState({
     hostname: '', ip_address: '', device_type: 'switch', os_type: 'cisco', username: 'admin', password: '', zone_id: '', is_legacy: false
   });
@@ -107,7 +108,6 @@ export default function Inventory({ devices, fetchNetworkStatus, userRole, orgDa
                 <input required type="text" value={formData.username} onChange={e => setFormData({...formData, username: e.target.value})} style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px' }} />
               </div>
 
-              {/* --- NEW: PASSWORD INPUT --- */}
               <div style={{ flex: 1, minWidth: '150px' }}>
                 <label style={{ display: 'block', fontSize: '0.85rem', color: '#aaa', marginBottom: '5px' }}>Password</label>
                 <input 
@@ -115,7 +115,7 @@ export default function Inventory({ devices, fetchNetworkStatus, userRole, orgDa
                   value={formData.password} 
                   onChange={e => setFormData({...formData, password: e.target.value})} 
                   placeholder={editingId ? "(Leave blank to keep)" : "Enter password"} 
-                  required={!editingId} // Require password only when creating a new device
+                  required={!editingId} 
                   style={{ width: '100%', padding: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #444', borderRadius: '4px' }} 
                 />
               </div>

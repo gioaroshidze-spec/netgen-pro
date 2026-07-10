@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Login({ onLoginSuccess }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // --- NEW: PASSWORD CHANGE STATES ---
   const [requiresPasswordChange, setRequiresPasswordChange] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -20,7 +22,7 @@ export default function Login({ onLoginSuccess }) {
     formData.append('username', username);
     formData.append('password', password);
 
-    fetch('http://127.0.0.1:8000/auth/token', {
+    fetch(`${API_BASE}/auth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formData.toString()
@@ -51,7 +53,6 @@ export default function Login({ onLoginSuccess }) {
       });
   };
 
-  // --- NEW: THE PASSWORD CHANGE FUNCTION ---
   const handleChangePassword = (e) => {
     e.preventDefault();
     if (newPassword.length < 8) return setError('Password must be at least 8 characters long.');
@@ -60,7 +61,7 @@ export default function Login({ onLoginSuccess }) {
     setIsLoading(true);
     setError('');
 
-    fetch('http://127.0.0.1:8000/auth/change-password', {
+    fetch(`${API_BASE}/auth/change-password`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
@@ -76,7 +77,6 @@ export default function Login({ onLoginSuccess }) {
         return res.json();
       })
       .then(() => {
-        // Password successfully changed in DB, unlock the dashboard
         onLoginSuccess();
       })
       .catch((err) => {

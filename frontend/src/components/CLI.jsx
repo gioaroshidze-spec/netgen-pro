@@ -14,7 +14,7 @@ export function TerminalWindow({ device, isActive, onClose }) {
   useEffect(() => {
     let isMounted = true;
 
-    // THE MAGIC FIX: Wait for all browser fonts to load BEFORE xterm measures character width
+    // Wait for all browser fonts to load BEFORE xterm measures character width
     document.fonts.ready.then(() => {
       if (!isMounted || !terminalRef.current) return;
 
@@ -30,7 +30,7 @@ export function TerminalWindow({ device, isActive, onClose }) {
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
 
-      // --- NEW: FORCE CANVAS RENDERING TO FIX TEXT OVERLAP ---
+      // FORCE CANVAS RENDERING TO FIX TEXT OVERLAP
       const canvasAddon = new CanvasAddon();
       term.loadAddon(canvasAddon);
 
@@ -46,9 +46,13 @@ export function TerminalWindow({ device, isActive, onClose }) {
         fitAddon.fit();
         term.writeln(`\x1b[36m--- Establishing Secure Connection to ${device.hostname} ---\x1b[0m`);
 
-      // 3. Open the WebSocket to our FastAPI Backend
+        // 3. Open the WebSocket to our FastAPI Backend
         const token = localStorage.getItem('token');
-        const socket = new WebSocket(`ws://127.0.0.1:8000/ws/cli/${device.id}?token=${token}`); // <-- INJECT TOKEN HERE
+        
+        // --- DYNAMIC WEBSOCKET ROUTING ---
+        const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000';
+        const socket = new WebSocket(`${WS_BASE}/ws/cli/${device.id}?token=${token}`);
+        
         ws.current = socket;
 
         // 4. Bridge Data
@@ -81,7 +85,7 @@ export function TerminalWindow({ device, isActive, onClose }) {
         };
       }, [device.id, device.hostname]);
 
-  // --- NEW: React to Window Resizing and Tab Switching ---
+  // React to Window Resizing and Tab Switching
   useEffect(() => {
     // When the user switches to this tab, or resizes the browser window, recalculate the terminal size
     const handleResize = () => {

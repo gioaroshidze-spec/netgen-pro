@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 
-const API_URL = 'http://127.0.0.1:8000/device/';
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_URL = `${API_BASE}/device/`;
 
 export default function ManualOperations({ devices, archiveFiles, userRole }) {
   // Global Backup Destinations
@@ -49,7 +51,8 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
     if (!targetDevice) return;
     setIsBackingUp(true);
     
-    fetch(`http://127.0.0.1:8000/backup-device/${targetDevice.id}`, { 
+    // --- PATCHED BACKTICK FETCH ---
+    fetch(`${API_BASE}/backup-device/${targetDevice.id}`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       body: JSON.stringify({ save_nvram: backupDestNVRAM, save_flash: backupDestFlash, download_local: backupDestLocal, save_archive: backupDestArchive, prefix: maintBackupName })

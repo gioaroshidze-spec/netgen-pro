@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Configuration({ selectedSwitches, selectedRouters, loadedTemplate, setLoadedTemplate, userRole }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
@@ -37,16 +40,16 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     }
 
     setIsAiGenerating(true);
-    fetch('http://127.0.0.1:8000/configuration/generate', {
+    fetch(`${API_BASE}/configuration/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json',
+      headers: { 
+        'Content-Type': 'application/json',
         'Authorization': `Bearer ${localStorage.getItem('token')}`
        },
       body: JSON.stringify({
         prompt: aiPrompt,
         switches: selectedSwitches,
         routers: selectedRouters,
-        // PASS THE LOADED TEMPLATE TO THE AI
         base_template: loadedTemplate ? loadedTemplate.payload : null 
       })
     })
@@ -78,9 +81,10 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     }
 
     setIsSavingTemplate(true);
-    fetch('http://127.0.0.1:8000/templates/', {
+    fetch(`${API_BASE}/templates/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 
+      headers: { 
+        'Content-Type': 'application/json', 
         'Authorization': `Bearer ${localStorage.getItem('token')}`
        },
       body: JSON.stringify({
@@ -122,10 +126,12 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     try {
       const endpoint = mode === 'push' ? '/configuration/push' : '/configuration/simulate';
       
-      const response = await fetch(`http://127.0.0.1:8000${endpoint}`, {
+      const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 
-          'Authorization': `Bearer ${localStorage.getItem('token')}`},
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
         body: JSON.stringify({
           prompt: aiPrompt,
           config_text: generatedAiConfig,
@@ -175,14 +181,10 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   };
 
   const isBusy = isSimulating || isPushing || !generatedAiConfig;
-
-  // NEW: RBAC Logic for Execution
-  // Admins can always execute. Viewers can ONLY execute if a template is loaded.
   const canExecute = userRole === 'admin' || (userRole === 'viewer' && loadedTemplate !== null);
 
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
-      
       {/* ACTIVE TEMPLATE BANNER */}
       {loadedTemplate && (
         <div style={{ backgroundColor: '#007acc15', border: '1px solid #007acc', padding: '15px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -223,7 +225,6 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h3 style={{ margin: 0 }}>Generated Configuration Model</h3>
-          
           <button 
             onClick={() => setIsEditing(!isEditing)}
             disabled={!generatedAiConfig && !isEditing}
@@ -245,7 +246,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           </pre>
         )}
 
-        {/* --- NEW: SAVE AS TEMPLATE FORM --- */}
+        {/* SAVE AS TEMPLATE FORM */}
         {generatedAiConfig && !loadedTemplate && (
           <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px dashed #444', display: 'flex', gap: '15px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div style={{ flex: 1, minWidth: '200px' }}>
@@ -276,7 +277,6 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           >
             {isSimulating ? 'Simulating...' : '🧪 Simulate Changes (--check)'}
           </button>
-          
           <button 
             onClick={() => executeConfig('push')} 
             disabled={isBusy || !canExecute} 
@@ -300,7 +300,6 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           </div>
         </div>
       )}
-
     </div>
   );
 }

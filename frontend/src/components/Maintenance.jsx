@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import ManualOperations from './ManualOperations';
 import ScheduledJobs from './ScheduledJobs';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Maintenance({ devices, archiveFiles, userRole }) {
   const [activeView, setActiveView] = useState('manual');
 

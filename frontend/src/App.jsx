@@ -11,7 +11,9 @@ import Users from './components/Users'
 import Dashboard from './components/Dashboard'
 import Topology from './components/Topology' 
 
-const MAP_URL = 'http://127.0.0.1:8000/network-map/'
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const MAP_URL = `${API_BASE}/network-map/`
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!localStorage.getItem('token'))
@@ -58,7 +60,7 @@ function App() {
   }
 
   const fetchOrgData = () => {
-    fetch('http://127.0.0.1:8000/organization/hierarchy', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    fetch(`${API_BASE}/organization/hierarchy`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => {
       if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
       if (!res.ok) throw new Error("Failed to fetch org tree");
@@ -69,7 +71,7 @@ function App() {
   }
 
   const fetchArchiveFiles = () => {
-    fetch('http://127.0.0.1:8000/archive/files', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    fetch(`${API_BASE}/archive/files`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => {
       if (res.status === 401) { handleLogout(); throw new Error("Unauthorized"); }
       if (!res.ok) throw new Error("Failed to fetch archives");
@@ -96,7 +98,7 @@ function App() {
   }
 
   // =================================================================
-  // --- THE FIX: INTERCEPT POPUP CLI REQUESTS ---
+  // --- INTERCEPT POPUP CLI REQUESTS ---
   // =================================================================
   const urlParams = new URLSearchParams(window.location.search);
   const cliTargetId = urlParams.get('cli');

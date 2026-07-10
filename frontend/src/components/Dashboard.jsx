@@ -1,5 +1,7 @@
 import React from 'react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Dashboard({ devices, setActiveTab, userRole }) {
   const username = localStorage.getItem('username') || 'Operator';
   

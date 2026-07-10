@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = 'http://127.0.0.1:8000/templates/';
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_URL = `${API_BASE}/templates/`;
 
 export default function Templates({ setActiveTab, setLoadedTemplate }) {
   const [templates, setTemplates] = useState([]);
@@ -10,7 +12,7 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
   const fetchTemplates = () => {
     setIsLoading(true);
     fetch(API_URL, {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- TOKEN INJECTED
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
     })
       .then(res => {
         if (!res.ok) throw new Error("Failed to fetch templates");
@@ -34,7 +36,7 @@ export default function Templates({ setActiveTab, setLoadedTemplate }) {
     if (!window.confirm("Are you sure you want to delete this template?")) return;
     fetch(`${API_URL}${id}`, { 
       method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } // <-- TOKEN INJECTED
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } 
     })
       .then(() => fetchTemplates())
       .catch(err => console.error("Failed to delete", err));

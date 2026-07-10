@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function EventLogs() {
   const [logs, setLogs] = useState([]);
   const [isLoading, setIsLoading] = useState(false);

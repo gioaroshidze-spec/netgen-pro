@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactFlow, { Background, Controls, MiniMap, applyNodeChanges, applyEdgeChanges, Handle, Position, getBezierPath, EdgeLabelRenderer, BaseEdge } from 'reactflow';
 import PropTypes from 'prop-types'; 
 import dagre from 'dagre'; 
@@ -6,11 +6,15 @@ import { NodeResizer } from '@reactflow/node-resizer';
 import '@reactflow/node-resizer/dist/style.css';
 import 'reactflow/dist/style.css';
 
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 const CustomDeviceNode = ({ data }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [imgError, setImgError] = useState(false); 
   const [telemetry, setTelemetry] = useState({ cpu: 'Fetching...', memory: 'Fetching...', uptime: 'Fetching...' });
   const [hasFetched, setHasFetched] = useState(false);
+  const hoverTimer = useRef(null); // <-- NEW: Hover DDoS Protection
   
   const isGhost = data.status === 'unmanaged';
   const isOnline = data.status === 'online';
@@ -20,18 +24,26 @@ const CustomDeviceNode = ({ data }) => {
   if (isGhost) iconSrc = ''; 
 
   const handleMouseEnter = () => {
-    setIsHovered(true);
-    if (!hasFetched && !isGhost && isOnline && data.full_device) {
-      setHasFetched(true); 
-      fetch(`http://127.0.0.1:8000/topology/telemetry/${data.full_device.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
-      .then(res => res.ok ? res.json() : null)
-      .then(metrics => { if (metrics) setTelemetry(metrics); else setTelemetry({ cpu: 'Error', memory: 'Error', uptime: 'Error' }); })
-      .catch(() => setTelemetry({ cpu: 'Timeout', memory: 'Timeout', uptime: 'Timeout' }));
-    }
+    // Wait 500ms before triggering the heavy Netmiko API call
+    hoverTimer.current = setTimeout(() => {
+      setIsHovered(true);
+      if (!hasFetched && !isGhost && isOnline && data.full_device) {
+        setHasFetched(true); 
+        fetch(`${API_BASE}/topology/telemetry/${data.full_device.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+        .then(res => res.ok ? res.json() : null)
+        .then(metrics => { if (metrics) setTelemetry(metrics); else setTelemetry({ cpu: 'Error', memory: 'Error', uptime: 'Error' }); })
+        .catch(() => setTelemetry({ cpu: 'Timeout', memory: 'Timeout', uptime: 'Timeout' }));
+      }
+    }, 500);
+  };
+
+  const handleMouseLeave = () => {
+    clearTimeout(hoverTimer.current); // Cancel the API call if mouse leaves before 500ms
+    setIsHovered(false);
   };
 
   return (
-    <div onMouseEnter={handleMouseEnter} onMouseLeave={() => setIsHovered(false)} style={{ padding: '15px', borderRadius: '8px', backgroundColor: '#252526', border: `2px solid ${borderColor}`, boxShadow: glow, color: '#fff', textAlign: 'center', minWidth: '130px', position: 'relative', opacity: isGhost ? 0.7 : 1 }}>
+    <div onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave} style={{ padding: '15px', borderRadius: '8px', backgroundColor: '#252526', border: `2px solid ${borderColor}`, boxShadow: glow, color: '#fff', textAlign: 'center', minWidth: '130px', position: 'relative', opacity: isGhost ? 0.7 : 1 }}>
       <Handle type="target" position={Position.Top} style={{ background: '#555' }} />
       {!isGhost && isOnline && data.latency && (<div style={{ position: 'absolute', top: '-10px', right: '-10px', backgroundColor: '#1e1e1e', border: `1px solid ${borderColor}`, color: borderColor, padding: '2px 8px', borderRadius: '12px', fontSize: '0.65rem', fontWeight: 'bold', boxShadow: '0 2px 5px rgba(0,0,0,0.5)', zIndex: 5 }}>{data.latency}</div>)}
       {isHovered && !isGhost && (
@@ -79,7 +91,6 @@ const CustomEdge = ({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
 };
 CustomEdge.propTypes = { id: PropTypes.string, sourceX: PropTypes.number, sourceY: PropTypes.number, targetX: PropTypes.number, targetY: PropTypes.number, sourcePosition: PropTypes.string, targetPosition: PropTypes.string, style: PropTypes.object, markerEnd: PropTypes.string, data: PropTypes.object };
 
-
 export default function Topology({ devices, userRole, setActiveTab, fetchNetworkStatus, orgData }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
@@ -109,7 +120,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   }, [orgData, selectedZones.length, activeView]);
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/topology/views', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    fetch(`${API_BASE}/topology/views`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => res.ok ? res.json() : [])
     .then(data => setSavedViews(data))
     .catch(err => console.error("Failed to load views:", err));
@@ -128,7 +139,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     const targetPort = window.prompt(`Enter the inbound port for ${params.target} (e.g., ether1):`);
     if (!targetPort) return;
     
-    fetch('http://127.0.0.1:8000/topology/edges/manual', {
+    fetch(`${API_BASE}/topology/edges/manual`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       body: JSON.stringify({
@@ -147,7 +158,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
   const handleDeleteManualEdge = (edgeId) => {
     if(!window.confirm("Delete this manual link?")) return;
-    fetch(`http://127.0.0.1:8000/topology/edges/${edgeId}`, {
+    fetch(`${API_BASE}/topology/edges/${edgeId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
     })
@@ -181,7 +192,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
       else if (n.type === 'customZone') currentCoords[n.id] = { x: n.position.x, y: n.position.y, width: n.width || n.style?.width, height: n.height || n.style?.height };
     });
 
-    fetch('http://127.0.0.1:8000/topology/views', {
+    fetch(`${API_BASE}/topology/views`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
       body: JSON.stringify({ name: newViewName, zone_ids: selectedZones, coordinates: currentCoords })
@@ -201,8 +212,8 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
     
-    fetch(`http://127.0.0.1:8000/topology/views/${activeView.id}`, { method: 'DELETE', headers })
-    .then(() => fetch('http://127.0.0.1:8000/topology/views', { method: 'POST', headers, body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) }))
+    fetch(`${API_BASE}/topology/views/${activeView.id}`, { method: 'DELETE', headers })
+    .then(() => fetch(`${API_BASE}/topology/views`, { method: 'POST', headers, body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) }))
     .then(res => res.json())
     .then(newView => {
       setSavedViews(prev => [...prev.filter(v => v.id !== activeView.id), newView]);
@@ -214,7 +225,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
   const handleDeleteView = (viewId) => {
     if (!window.confirm("Delete this saved view?")) return;
-    fetch(`http://127.0.0.1:8000/topology/views/${viewId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    fetch(`${API_BASE}/topology/views/${viewId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(() => { setSavedViews(savedViews.filter(v => v.id !== viewId)); if (activeView?.id === viewId) setActiveView(null); });
   };
 
@@ -224,7 +235,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
   };
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/topology/edges', { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    fetch(`${API_BASE}/topology/edges`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
     .then(res => res.ok ? res.json() : [])
     .then(edgeData => {
       let savedGhostPositions = {};
@@ -293,8 +304,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
           });
         } else if (activeNodeIds.has(edge.source_hostname) && !devices.find(d => d.hostname === edge.target_hostname)) {
            if (!currentNodes.find(n => n.id === edge.target_hostname)) {
-              
-              // THE SURGICAL INCISION: Check activeView coordinates first, fallback to localStorage
               const viewPos = activeView?.coordinates?.[edge.target_hostname];
               const savedPos = viewPos || savedGhostPositions[edge.target_hostname];
               
@@ -363,16 +372,35 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     localStorage.setItem('vnms_ghost_positions', JSON.stringify(ghostPositions));
     localStorage.setItem('vnms_zone_geometries', JSON.stringify(zoneGeometries)); 
 
-    fetch('http://127.0.0.1:8000/topology/update-coordinates', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify(coordinates) })
+    fetch(`${API_BASE}/topology/update-coordinates`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify(coordinates) })
     .then(async res => { if (!res.ok) { const err = await res.json(); throw new Error(err.detail); } return res.json(); })
     .then(() => { setIsSaving(false); alert("✅ Global Map Layout and Zone Sizes saved successfully!"); if (fetchNetworkStatus) fetchNetworkStatus(); })
     .catch(err => { console.error(err); alert(`❌ Failed: ${err.message}`); setIsSaving(false); });
   };
 
-  const handleDiscovery = () => { setIsDiscovering(true); fetch(`http://127.0.0.1:8000/topology/discover`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(res => res.json()).then(() => { alert("Discovery Engine launched. Map will refresh shortly."); setIsDiscovering(false); }).catch(() => setIsDiscovering(false)); };
-  const handleReboot = () => { if (!selectedDevice || !window.confirm(`⚠️ Reboot ${selectedDevice.hostname}?`)) return; setIsRebooting(true); fetch(`http://127.0.0.1:8000/device/${selectedDevice.id}/reboot`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(() => { alert("Reboot queued."); setIsRebooting(false); setSelectedDevice(null); }).catch(() => setIsRebooting(false)); };
-  const handlePortAction = (hostname, port, action) => { if (!window.confirm(`⚠️ ${action.toUpperCase()} port ${port}?`)) return; setBouncingPort(`${hostname}-${port}`); fetch('http://127.0.0.1:8000/topology/port-action', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ hostname, port, action }) }).then(res => res.json()).then(data => { alert(`✅ ${data.message}`); setBouncingPort(null); }).catch(err => { alert(`❌ Error: ${err.message}`); setBouncingPort(null); }); };
-  const handlePcap = (targetDev, targetPort) => { if(!targetDev) return; const url = `http://127.0.0.1:8000/topology/pcap?device_id=${targetDev.id}&port=${encodeURIComponent(targetPort)}&token=${localStorage.getItem('token')}`; window.open(url, `pcap_${targetDev.id}`, `width=800,height=600`); };
+  const handleDiscovery = () => { 
+    setIsDiscovering(true); 
+    fetch(`${API_BASE}/topology/discover`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
+    .then(async res => {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to start discovery");
+      }
+      return res.json();
+    })
+    .then(data => { 
+      alert(`✅ ${data.message}`); 
+      setTimeout(() => setIsDiscovering(false), 10000); // 10-second cooldown UI lock
+    })
+    .catch(err => { 
+      alert(`❌ Error: ${err.message}`);
+      setIsDiscovering(false); // Unlock immediately on error
+    }); 
+  };
+  
+  const handleReboot = () => { if (!selectedDevice || !window.confirm(`⚠️ Reboot ${selectedDevice.hostname}?`)) return; setIsRebooting(true); fetch(`${API_BASE}/device/${selectedDevice.id}/reboot`, { method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } }).then(() => { alert("Reboot queued."); setIsRebooting(false); setSelectedDevice(null); }).catch(() => setIsRebooting(false)); };
+  const handlePortAction = (hostname, port, action) => { if (!window.confirm(`⚠️ ${action.toUpperCase()} port ${port}?`)) return; setBouncingPort(`${hostname}-${port}`); fetch(`${API_BASE}/topology/port-action`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ hostname, port, action }) }).then(res => res.json()).then(data => { alert(`✅ ${data.message}`); setBouncingPort(null); }).catch(err => { alert(`❌ Error: ${err.message}`); setBouncingPort(null); }); };
+  const handlePcap = (targetDev, targetPort) => { if(!targetDev) return; const url = `${API_BASE}/topology/pcap?device_id=${targetDev.id}&port=${encodeURIComponent(targetPort)}&token=${localStorage.getItem('token')}`; window.open(url, `pcap_${targetDev.id}`, `width=800,height=600`); };
 
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 120px)', position: 'relative', border: '1px solid #333', borderRadius: '8px', overflow: 'hidden' }}>
@@ -522,4 +550,3 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     </div>
   );
 }
-Topology.propTypes = { devices: PropTypes.array.isRequired, userRole: PropTypes.string.isRequired, setActiveTab: PropTypes.func.isRequired, fetchNetworkStatus: PropTypes.func, orgData: PropTypes.array.isRequired };

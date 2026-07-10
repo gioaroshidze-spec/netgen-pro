@@ -1,14 +1,16 @@
 import React, { useState, useEffect } from 'react';
 
-const JOBS_URL = 'http://127.0.0.1:8000/jobs/';
-const TEMPLATES_URL = 'http://127.0.0.1:8000/templates/';
+// --- DYNAMIC API ROUTING ---
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const JOBS_URL = `${API_BASE}/jobs/`;
+const TEMPLATES_URL = `${API_BASE}/templates/`;
 
 export default function ScheduledJobs({ devices, userRole }) {
   const [jobs, setJobs] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [isJobsLoading, setIsJobsLoading] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
-  const [expandedRow, setExpandedRow] = useState(null); // <-- NEW STATE FOR DETAILS
+  const [expandedRow, setExpandedRow] = useState(null); 
 
   // New Job Form State
   const [schedName, setSchedName] = useState('');
