@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from netmiko import ConnectHandler
+from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 from datetime import datetime
 from database import get_db
 import models, schemas
@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 import tempfile
 import asyncio
 from typing import Optional
+import concurrent.futures
 from logger import log_event
 
 from routers.auth import get_current_admin
 from routers.auth import decrypt_secret
-# --- THE SURGICAL INCISION: Import our central connection wrappers ---
 from connection_utils import get_netmiko_params, get_ansible_inventory_vars
 
 load_dotenv()
@@ -23,12 +23,12 @@ router = APIRouter(tags=["Maintenance Operations"])
 ARCHIVE_DIR = "archive"
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
-# 7. Single Backup (POST) - MULTI-VENDOR
-@router.post("/backup-device/{device_id}")
-def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
-    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
-    if not device: raise HTTPException(status_code=404, detail="Device not found")
-    
+# --- THREAD WORKER FOR BACKUPS ---
+def process_single_backup(device: models.NetworkDevice, options: schemas.BackupOptions) -> dict:
+    """
+    Isolated Netmiko worker function for ThreadPoolExecutor.
+    Handles the SSH connection and returns the raw configuration string.
+    """
     show_cmd = "show running-config"
     if device.os_type == 'mikrotik': show_cmd = "/export"
     elif device.os_type in ['alcatel', 'alcatel-lucent']: show_cmd = "show configuration snapshot"
@@ -58,94 +58,104 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
                 clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                 config_data = "\n".join(clean_lines)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        os_type = device.os_type or "UnknownOS"
-        dev_type = device.device_type or "UnknownDevice"
-        custom_prefix = options.prefix.strip() if options.prefix else "Backup"
-        strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
-        
-        if options.save_archive:
-            archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
-            with open(archive_path, "w") as f:
-                f.write(config_data)
+        return {
+            "hostname": device.hostname,
+            "os_type": device.os_type or "UnknownOS",
+            "dev_type": device.device_type or "UnknownDevice",
+            "success": True,
+            "config": config_data
+        }
 
-        log_event(
-            db=db, event_type="Maintenance", severity="SUCCESS", author=current_user.username,
-            target_devices=[device.hostname],
-            details={"action": "Single Backup", "filename": strict_filename, "options": options.model_dump()}
-        )
-        return {"hostname": device.hostname, "config": config_data, "filename": strict_filename}
-    
+    except (NetmikoTimeoutException, NetmikoAuthenticationException) as e:
+        return {"hostname": device.hostname, "success": False, "error": "Connection Timeout or Auth Failed"}
     except Exception as e:
-        log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Single Backup Failed", "error": str(e)})
-        raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {str(e)}")
+        return {"hostname": device.hostname, "success": False, "error": str(e)}
 
-# 8. Bulk Backup (POST) - MULTI-VENDOR
+
+# 7. Single Backup (POST) - MULTI-VENDOR
+@router.post("/backup-device/{device_id}")
+def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    if not device: raise HTTPException(status_code=404, detail="Device not found")
+    
+    result = process_single_backup(device, options)
+    
+    if not result["success"]:
+        log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Single Backup Failed", "error": result["error"]})
+        raise HTTPException(status_code=500, detail=f"SSH Connection Failed: {result['error']}")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    custom_prefix = options.prefix.strip() if options.prefix else "Backup"
+    strict_filename = f"{custom_prefix}_{result['os_type']}_{result['dev_type']}_{result['hostname']}_{timestamp}.txt"
+    
+    if options.save_archive:
+        archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+        with open(archive_path, "w") as f:
+            f.write(result["config"])
+
+    log_event(
+        db=db, event_type="Maintenance", severity="SUCCESS", author=current_user.username,
+        target_devices=[device.hostname],
+        details={"action": "Single Backup", "filename": strict_filename, "options": options.model_dump()}
+    )
+    return {"hostname": device.hostname, "config": result["config"], "filename": strict_filename}
+
+
+# 8. Bulk Backup (POST) - MULTI-VENDOR MULTITHREADED
 @router.post("/bulk-backup")
 def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
-    zip_buffer = io.BytesIO()
+    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(request.device_ids)).all()
+    if not devices:
+        raise HTTPException(status_code=404, detail="No valid devices found.")
 
-    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-        for dev_id in request.device_ids:
-            device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == dev_id).first()
-            if device:
-                show_cmd = "show running-config"
-                if device.os_type == 'mikrotik': show_cmd = "/export"
-                elif device.os_type in ['alcatel', 'alcatel-lucent']: show_cmd = "show configuration snapshot"
-
-                connection_params = get_netmiko_params(device)
-                
-                try:
-                    with ConnectHandler(**connection_params) as net_connect:
-                        if device.os_type != 'mikrotik':
-                            try: net_connect.enable()
-                            except: pass
-                            
-                        if request.options.save_nvram and device.os_type != 'mikrotik': 
-                            try: net_connect.save_config()
-                            except: pass
-                            
-                        if request.options.save_flash:
-                            if device.os_type == 'cisco':
-                                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
-                            elif device.os_type == 'mikrotik':
-                                net_connect.send_command("/export file=VNMS_Last_Good")
-                        
-                        if request.options.download_local or request.options.save_archive:
-                            raw_config = net_connect.send_command(show_cmd)
-                            clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
-                            config = "\n".join(clean_lines)
-                            
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            os_type = device.os_type or "UnknownOS"
-                            dev_type = device.device_type or "UnknownDevice"
-                            custom_prefix = request.options.prefix.strip() if request.options.prefix else "Backup"
-                            strict_filename = f"{custom_prefix}_{os_type}_{dev_type}_{device.hostname}_{timestamp}.txt"
-                            
-                            if request.options.save_archive:
-                                archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
-                                with open(archive_path, "w") as f:
-                                    f.write(config)
-                            if request.options.download_local:
-                                zip_file.writestr(strict_filename, config)
-                except Exception as e:
-                    if request.options.download_local:
-                        zip_file.writestr(f"{device.hostname}_ERROR.txt", f"Failed: {str(e)}")
-
-    zip_buffer.seek(0)
-    target_hostnames = [d.hostname for d in db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(request.device_ids)).all()]
+    results = []
     
+    # Blast out SSH connections concurrently to prevent 504 Timeouts
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        future_to_device = {executor.submit(process_single_backup, dev, request.options): dev for dev in devices}
+        
+        for future in concurrent.futures.as_completed(future_to_device):
+            device = future_to_device[future]
+            try:
+                res = future.result()
+                results.append(res)
+            except Exception as exc:
+                results.append({"hostname": device.hostname, "success": False, "error": str(exc)})
+
+    zip_buffer = io.BytesIO()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Compile the results into the zip buffer or archive folder
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        for res in results:
+            custom_prefix = request.options.prefix.strip() if request.options.prefix else "Backup"
+            
+            if res["success"]:
+                strict_filename = f"{custom_prefix}_{res['os_type']}_{res['dev_type']}_{res['hostname']}_{timestamp}.txt"
+                
+                if request.options.save_archive:
+                    archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
+                    with open(archive_path, "w") as f:
+                        f.write(res["config"])
+                        
+                if request.options.download_local:
+                    zip_file.writestr(strict_filename, res["config"])
+            else:
+                if request.options.download_local:
+                    zip_file.writestr(f"{res['hostname']}_ERROR.txt", f"Failed: {res.get('error')}")
+
     log_event(
         db=db, event_type="Maintenance", severity="INFO", author=current_user.username,
-        target_devices=target_hostnames,
+        target_devices=[d.hostname for d in devices],
         details={"action": "Bulk Backup Executed", "saved_to_archive": request.options.save_archive}
     )
 
     if not request.options.download_local:
         return {"message": "Backup completed successfully on devices."}
     
-    master_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return StreamingResponse(zip_buffer, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{master_timestamp}.zip"})
+    zip_buffer.seek(0)
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename=VNMS_Bulk_Backup_{timestamp}.zip"})
+
 
 # 9. RESTORE BACKUPS TO DEVICES (POST) - SECURED
 @router.post("/restore-devices/")
