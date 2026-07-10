@@ -3,6 +3,7 @@ import re
 import time
 import uuid
 import tempfile
+import threading
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -14,6 +15,13 @@ from routers.auth import get_current_user, get_current_admin
 from netmiko import ConnectHandler, file_transfer
 from logger import log_event
 from routers.auth import decrypt_secret
+
+# --- THE SURGICAL INCISION: Import our central connection wrapper ---
+from connection_utils import get_netmiko_params
+
+# --- NEW: Global Discovery Lock ---
+DISCOVERY_LOCK = threading.Lock()
+IS_DISCOVERING = False
 
 class ManualEdgeCreate(BaseModel):
     source_hostname: str
@@ -63,13 +71,22 @@ def update_coordinates(nodes: List[schemas.CoordinateUpdate], db: Session = Depe
 # --- ENTERPRISE MULTI-VENDOR DISCOVERY ---
 # ==========================================
 def background_discovery(username: str):
+    global IS_DISCOVERING
     db = SessionLocal()
+    
     try:
+        # Check and set the lock
+        with DISCOVERY_LOCK:
+            if IS_DISCOVERING:
+                print("[DISCOVERY ENGINE] Aborting: Discovery already in progress.")
+                return
+            IS_DISCOVERING = True
+            
         print("[DISCOVERY ENGINE] Starting Automated Enterprise Network Discovery...")
         devices = db.query(models.NetworkDevice).all()
         managed_hostnames = {d.hostname for d in devices}
         
-        # THE SURGICAL INCISION: Aggressive Normalization (strips hyphens, underscores, spaces)
+        # Aggressive Normalization (strips hyphens, underscores, spaces)
         def normalize_host(name: str):
             if not name: return ""
             return re.sub(r'[^a-z0-9]', '', name.lower())
@@ -80,16 +97,8 @@ def background_discovery(username: str):
         new_edges_list = []
 
         for device in devices:
-            netmiko_os = 'cisco_ios'
-            if device.os_type == 'mikrotik': netmiko_os = 'mikrotik_routeros'
-            elif device.os_type in ['hpe', 'aruba']: netmiko_os = 'hp_procurve'
-            elif device.os_type in ['alcatel', 'alcatel-lucent']: netmiko_os = 'alcatel_aos'
-
-            connection_params = {
-                'device_type': netmiko_os, 'host': device.ip_address,
-                'username': device.username, 'password': decrypt_secret(device.encrypted_password),
-                'fast_cli': True
-            }
+            # Fetch standardized, safe connection parameters
+            connection_params = get_netmiko_params(device)
 
             try:
                 with ConnectHandler(**connection_params) as net_connect:
@@ -125,7 +134,8 @@ def background_discovery(username: str):
                     
                     # ENTERPRISE OS DISCOVERY (Cisco, HPE, Aruba) -> LLDP & CDP
                     else:
-                        net_connect.enable()
+                        try: net_connect.enable()
+                        except: pass
                         output = net_connect.send_command("show lldp neighbors")
                         if "Invalid input" in output or "LLDP is not enabled" in output:
                             output = net_connect.send_command("show cdp neighbors")
@@ -206,10 +216,17 @@ def background_discovery(username: str):
         db.rollback()
         print(f"[DISCOVERY ENGINE] Fatal Error: {str(e)}")
     finally:
+        # Release the lock when finished or if it crashes
+        with DISCOVERY_LOCK:
+            IS_DISCOVERING = False
         db.close()
 
 @router.post("/topology/discover")
 def trigger_discovery(background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    global IS_DISCOVERING
+    if IS_DISCOVERING:
+        raise HTTPException(status_code=429, detail="A network discovery scan is already running. Please wait.")
+        
     background_tasks.add_task(background_discovery, current_user.username)
     return {"message": "Automated Network Discovery initiated. The map will update shortly."}
 
@@ -220,17 +237,11 @@ def trigger_discovery(background_tasks: BackgroundTasks, db: Session = Depends(g
 def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
     if not device: raise HTTPException(status_code=404, detail="Device not found")
-        
-    netmiko_os = 'cisco_ios'
-    if device.os_type == 'mikrotik': netmiko_os = 'mikrotik_routeros'
-    elif device.os_type in ['hpe', 'aruba']: netmiko_os = 'hp_procurve'
 
     try:
-        connection_params = {
-            'device_type': netmiko_os, 'host': device.ip_address,
-            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
-            'fast_cli': True, 'auth_timeout': 5, 'banner_timeout': 5
-        }
+        connection_params = get_netmiko_params(device)
+        connection_params['auth_timeout'] = 5
+        connection_params['banner_timeout'] = 5
         
         with ConnectHandler(**connection_params) as net_connect:
             if device.os_type == 'mikrotik':
@@ -282,11 +293,7 @@ def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(
     if device.os_type != 'cisco': raise HTTPException(status_code=400, detail="Packet trace via SSH is only supported on Cisco IOS-XE.")
 
     try:
-        connection_params = {
-            'device_type': 'cisco_ios', 'host': device.ip_address,
-            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
-            'fast_cli': True
-        }
+        connection_params = get_netmiko_params(device)
         
         capture_name = "VNMS_CAP"
         pcap_filename = f"vnms_{uuid.uuid4().hex[:8]}.pcap"
@@ -324,14 +331,11 @@ def background_reboot(device_id: int, username: str):
         device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
         if not device: return
 
-        netmiko_os = 'hp_procurve' if device.os_type in ['aruba', 'hpe'] else 'cisco_ios'
-        if device.os_type == 'mikrotik': netmiko_os = 'mikrotik_routeros'
-
-        connection_params = { 'device_type': netmiko_os, 'host': device.ip_address, 'username': device.username, 'password': decrypt_secret(device.encrypted_password) }
+        connection_params = get_netmiko_params(device)
 
         with ConnectHandler(**connection_params) as net_connect:
-            net_connect.enable()
             if device.os_type in ['cisco', 'aruba', 'hpe']:
+                net_connect.enable()
                 net_connect.send_command("write memory")
                 net_connect.send_command_timing("reload\n")
                 net_connect.send_command_timing("y\n") 
@@ -365,16 +369,8 @@ def execute_port_action(request: PortOperationRequest, db: Session = Depends(get
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname == request.hostname).first()
     if not device: raise HTTPException(status_code=404)
 
-    netmiko_os = 'cisco_ios'
-    if device.os_type == 'mikrotik': netmiko_os = 'mikrotik_routeros'
-    elif device.os_type in ['hpe', 'aruba']: netmiko_os = 'hp_procurve'
-
     try:
-        connection_params = {
-            'device_type': netmiko_os, 'host': device.ip_address,
-            'username': device.username, 'password': decrypt_secret(device.encrypted_password),
-            'fast_cli': True
-        }
+        connection_params = get_netmiko_params(device)
         
         with ConnectHandler(**connection_params) as net_connect:
             if device.os_type == 'mikrotik':
