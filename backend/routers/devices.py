@@ -2,9 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 import models, schemas
-import subprocess
 from logger import log_event
 import re
+import platform
 import subprocess
 import concurrent.futures
 
@@ -32,7 +32,7 @@ def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db), c
     if device.password:
         db_device.encrypted_password = encrypt_secret(device.password)
 
-    # 3. Add to DB directly (Removed the buggy overwrite line!)
+    # 3. Add to DB directly
     db.add(db_device)
     db.commit()
     db.refresh(db_device)
@@ -61,7 +61,7 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
         if existing_ip:
             raise HTTPException(status_code=400, detail=f"Error: IP Address '{device_update.ip_address}' is already in use.")
     
-    # --- THE FIX: Initialize the changes dictionary ---
+    # --- Initialize the changes dictionary ---
     changes = {}
     
     update_data = device_update.model_dump(exclude_unset=True, exclude={"password"})
@@ -108,28 +108,39 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
     
     def ping_device(device):
         clean_ip = device.ip_address.strip()
-        command = ["ping", "-c", "1", "-W", "1", clean_ip]
-        response = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        # --- THE FIX: CROSS-PLATFORM ICMP PING ---
+        ping_flag = '-n' if platform.system().lower() == 'windows' else '-c'
+        command = ["ping", ping_flag, "1", clean_ip]
+        
+        try:
+            # 3-second failsafe timeout to prevent hanging threads
+            response = subprocess.run(
+                command, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
+                text=True,
+                timeout=3
+            )
 
-        if response.returncode != 0:
-            return {
-                "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
-                "device_type": device.device_type, "os_type": device.os_type,
-                "username": device.username, "status": "offline", "latency": "N/A",
-                "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id,
-                "is_legacy": getattr(device, 'is_legacy', False) # <-- ADDED THIS
-            }
-        else:
-            match = re.search(r'time=([\d.]+)\s*ms', response.stdout)
-            latency = f"{match.group(1)}ms" if match else "<1ms"
+            if response.returncode != 0:
+                status, latency = "offline", "N/A"
+            else:
+                status = "online"
+                # Regex handles both Windows (time=2ms / time<1ms) and Linux (time=2.1 ms)
+                match = re.search(r'time[=<]([\d.]+)\s*ms', response.stdout, re.IGNORECASE)
+                latency = f"{match.group(1)}ms" if match else "<1ms"
+                
+        except Exception:
+            status, latency = "offline", "N/A"
             
-            return {
-                "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
-                "device_type": device.device_type, "os_type": device.os_type,
-                "username": device.username, "status": "online", "latency": latency,
-                "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id,
-                "is_legacy": getattr(device, 'is_legacy', False) # <-- ADDED THIS
-            }
+        return {
+            "id": device.id, "hostname": device.hostname, "ip_address": device.ip_address,
+            "device_type": device.device_type, "os_type": device.os_type,
+            "username": device.username, "status": status, "latency": latency,
+            "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id,
+            "is_legacy": getattr(device, 'is_legacy', False)
+        }
 
     # Blast out all pings simultaneously (Lightning fast)
     mapped_devices = []
