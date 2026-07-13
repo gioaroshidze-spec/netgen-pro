@@ -2,13 +2,14 @@ import tempfile
 import subprocess
 import json
 import os
-from logger import log_event
+
 # --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_ansible_inventory_vars
 
-def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution", is_check_mode=True, author="System"):
+def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
     """
-    Executes Ansible, dynamically builds OS-specific task blocks, streams output, and logs to DB.
+    Executes Ansible, dynamically builds OS-specific task blocks, and streams output.
+    (Audit logging is now handled upstream by the stream_ansible_and_log wrapper).
     """
     # Fix list-only AI outputs just in case
     for host, data in ai_config_data.items():
@@ -143,32 +144,12 @@ def run_ansible_playbook(ai_config_data, devices, db, prompt="Manual Execution",
             text=True, bufsize=1, universal_newlines=True, env=env
         )
 
-        ansible_full_log = ""
         for line in process.stdout:
             clean_line = line.rstrip('\r\n')
-            ansible_full_log += clean_line + "\n"
             yield f"data: {clean_line}\n\n"
 
         process.stdout.close()
         process.wait()
-
-        # 4. AUDIT LOGGING
-        severity = "SUCCESS" if process.returncode == 0 else "ERROR"
-        action = "Configuration Simulation" if is_check_mode else "Live Configuration Push"
-        
-        log_event(
-            db=db,
-            event_type="Configuration",
-            severity=severity,
-            author=author,
-            target_devices=[d.hostname for d in devices],
-            details={
-                "action": action,
-                "prompt": prompt,
-                "ai_model": ai_config_data,
-                "ansible_logs": ansible_full_log
-            }
-        )
 
         yield "data: --------------------------------------------------\n\n"
         if process.returncode == 0:

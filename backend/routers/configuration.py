@@ -1,7 +1,6 @@
-import tempfile
-import subprocess
 import json
 import os
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -14,9 +13,95 @@ from netmiko import ConnectHandler
 from routers.auth import get_current_user
 from ansible_engine import run_ansible_playbook
 from routers.auth import decrypt_secret
+from logger import log_event
 
 router = APIRouter(tags=["Configuration Engine"])
 
+# ==========================================
+# --- STREAM INTERCEPTOR & LOGGER ---
+# ==========================================
+def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_data: dict, devices: list, mode: str, author: str, source_template: str = None):
+    """
+    Wraps the Ansible output generator. Streams data to the frontend in real-time,
+    and once finished, parses the recap, skips, and errors to save a rich audit log.
+    """
+    full_output = ""
+    
+    # 1. Yield chunks to the frontend exactly as they arrive
+    for chunk in ansible_stream:
+        full_output += chunk
+        yield chunk
+
+    # 2. Once the stream finishes, clean the SSE formatting for parsing
+    clean_output = full_output.replace("data: ", "").replace("\n\n", "\n")
+
+    # 3. Surgically extract ONLY the relevant blocks (Failures, Skips & Recap)
+    parts = re.split(r'(?=TASK \[|PLAY RECAP)', clean_output)
+    
+    important_blocks = []
+    for i, part in enumerate(parts):
+        if "PLAY RECAP" in part:
+            important_blocks.append(part.strip())
+        elif re.search(r'^[ \t]*(fatal|failed|skipping|\[ERROR\])', part, re.MULTILINE | re.IGNORECASE):
+            important_blocks.append(part.strip())
+        elif i == 0 and re.search(r'(error|fatal)', part, re.IGNORECASE):
+            important_blocks.append(part.strip())
+            
+    final_ansible_log = "\n\n".join(important_blocks)
+
+    if not final_ansible_log.strip():
+        final_ansible_log = "--- NO ERRORS OR SKIPS DETECTED ---\n\n"
+        recap_idx = clean_output.rfind("PLAY RECAP")
+        if recap_idx != -1:
+            final_ansible_log += clean_output[recap_idx:].strip()
+        else:
+            final_ansible_log += clean_output[-1000:] if len(clean_output) > 1000 else clean_output
+
+    final_ansible_log = final_ansible_log.strip()
+
+    # 4. Determine strict Success/Fail status
+    has_failures = bool(re.search(r'failed=[1-9]\d*|unreachable=[1-9]\d*', final_ansible_log)) or bool(re.search(r'^[ \t]*(fatal|failed|\[ERROR\])', final_ansible_log, re.MULTILINE | re.IGNORECASE))
+    final_severity = "ERROR" if has_failures else "SUCCESS"
+    execution_status = "Failed" if has_failures else "Success"
+
+    # 5. Build the rich target device payload
+    target_devices_payload = [
+        {
+            "hostname": dev.hostname,
+            "ip_address": dev.ip_address,
+            "device_type": dev.device_type,
+            "os_type": dev.os_type
+        } for dev in devices
+    ]
+
+    # 6. Build the UI Details mapping
+    details = {
+        "action": "AI Configuration Deployment",
+        "mode": mode,
+        "prompt": prompt,
+        "generated_commands": json.dumps(ai_config_data, indent=2),
+        "execution_status": execution_status,
+        "ansible_logs": final_ansible_log
+    }
+
+    # INJECT TEMPLATE TRACKING IF PRESENT
+    if source_template:
+        details["source_template"] = source_template
+
+    # 7. Commit to database
+    log_event(
+        db=db,
+        event_type="Configuration",
+        severity=final_severity,
+        details=details,
+        target_devices=target_devices_payload,
+        author=author
+    )
+
+
+# ==========================================
+# --- ROUTES ---
+# ==========================================
 @router.post("/configuration/generate")
 def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.prompt.strip():
@@ -27,7 +112,6 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
     if target_hostnames:
         devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
 
-    # --- NEW: Build the OS Mapping String for the AI ---
     os_mapping_text = ""
     for dev in devices:
         os_mapping_text += f"- Hostname: {dev.hostname} | OS Type: {dev.os_type.upper()}\n"
@@ -58,7 +142,6 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
     if devices:
         for dev in devices:
             try:
-                # --- NEW: Dynamic Netmiko OS Mapping ---
                 netmiko_os = 'cisco_ios'
                 if dev.os_type == 'aruba': netmiko_os = 'aruba_os'
                 elif dev.os_type == 'hpe': netmiko_os = 'hp_procurve'
@@ -72,19 +155,15 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
                 }
                 
                 with ConnectHandler(**connection_params) as net_connect:
-                    # MikroTik doesn't use the standard enable mode
                     if dev.os_type != 'mikrotik':
                         try: net_connect.enable()
                         except: pass
                     
-                    # --- NEW: Vendor-Specific Show Commands ---
                     show_cmd = "show running-config"
                     if dev.os_type == 'mikrotik': show_cmd = "/export"
                     elif dev.os_type in ['alcatel', 'alcatel-lucent']: show_cmd = "show configuration snapshot"
                     
                     raw_config = net_connect.send_command(show_cmd)
-                    
-                    # Clean up standard Cisco/HPE headers
                     clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                     config_content = "\n".join(clean_lines)
                     
@@ -117,28 +196,45 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Engine Error: Check console for details. {str(e)}")
 
+
 @router.post("/configuration/simulate")
 def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
-    try: ai_config_data = json.loads(request.config_text)
-    except json.JSONDecodeError: raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
+    try: 
+        ai_config_data = json.loads(request.config_text)
+    except json.JSONDecodeError: 
+        raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
     if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=True, author=current_user.username), media_type="text/event-stream")
+    source_template = request.source_template
+    ansible_stream = run_ansible_playbook(ai_config_data, devices, is_check_mode=True)
+
+    return StreamingResponse(
+        stream_ansible_and_log(ansible_stream, db, request.prompt, ai_config_data, devices, "Simulate (--check)", current_user.username, source_template), 
+        media_type="text/event-stream"
+    )
 
 @router.post("/configuration/push")
 def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
-    try: ai_config_data = json.loads(request.config_text)
-    except json.JSONDecodeError: raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
+    try: 
+        ai_config_data = json.loads(request.config_text)
+    except json.JSONDecodeError: 
+        raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
     if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
 
-    return StreamingResponse(run_ansible_playbook(ai_config_data, devices, db=db, prompt=request.prompt, is_check_mode=False, author=current_user.username), media_type="text/event-stream")
+    source_template = request.source_template
+    ansible_stream = run_ansible_playbook(ai_config_data, devices, is_check_mode=False)
+
+    return StreamingResponse(
+        stream_ansible_and_log(ansible_stream, db, request.prompt, ai_config_data, devices, "Production Push", current_user.username, source_template), 
+        media_type="text/event-stream"
+    )

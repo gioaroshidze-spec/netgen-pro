@@ -18,8 +18,8 @@ def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_
     # 1. Ask AI to generate a description
     try:
         model_name = os.getenv("ACTIVE_AI_MODEL", "claude-opus-4-7")
-        system_prompt = "You are a senior network architect. Summarize the following JSON network configuration in exatly ONE clear, concise sentence. Focus on the core pupose (e.g., 'Configures VLANS 10 and 20 on edge swtiches.') Do not include inroductory text."
-        user_prompt = f"Summarize this JSON config:/n{json.dumps(template.payload, indent=2)}"
+        system_prompt = "You are a senior network architect. Summarize the following JSON network configuration in exactly ONE clear, concise sentence. Focus on the core purpose (e.g., 'Configures VLANs 10 and 20 on edge switches.'). Do not include introductory text."
+        user_prompt = f"Summarize this JSON config:\n{json.dumps(template.payload, indent=2)}"
 
         response = completion(
             model=model_name,
@@ -51,12 +51,22 @@ def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_
     db.refresh(db_template)
 
     # 3. Log the creation in our event Logs
+    prompt_used = template.prompt if template.prompt else "Derived from live AI generation session"
+
     log_event(
         db=db,
         event_type="Configuration",
-        severity="SUCCESS",
+        severity="INFO",
+        author=current_user.username,
         target_devices=[],
-        details={"action": f"Created Template: {template.name}", "category": template.category, "description": ai_description}
+        details={
+            "action": "Template Saved", 
+            "template_name": template.name,
+            "category": template.category, 
+            "ai_description": ai_description,
+            "prompt": prompt_used,  # <-- Now passing the exact user prompt
+            "generated_commands": json.dumps(template.payload, indent=2)
+        }
     )
 
     return db_template
@@ -79,10 +89,11 @@ def delete_template(template_id: int, db: Session = Depends(get_db), current_use
 
     log_event(
         db=db,
-        event_type="Configruation",
+        event_type="Configuration",
         severity="WARNING",
+        author=current_user.username,
         target_devices=[],
-        details={"action": f"Deleted Template: {template_name}"}
+        details={"action": "Template Deleted", "template_name": template_name}
     )
 
     return {"message": "Template deleted successfully"}

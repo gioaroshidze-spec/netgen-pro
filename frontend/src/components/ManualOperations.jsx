@@ -51,7 +51,6 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
     if (!targetDevice) return;
     setIsBackingUp(true);
     
-    // --- PATCHED BACKTICK FETCH ---
     fetch(`${API_BASE}/backup-device/${targetDevice.id}`, { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
@@ -67,7 +66,9 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a'); a.href = url; a.download = data.filename; 
         document.body.appendChild(a); a.click(); window.URL.revokeObjectURL(url); a.remove();
-      } else if (!backupDestLocal) { alert(`Backup successfully saved on ${data.hostname}`); }
+      } else if (!backupDestLocal) { 
+        alert(data.message || `Backup successfully saved on ${data.hostname}`); 
+      }
       setIsBackingUp(false); setMaintBackupName('');
     })
     .catch(err => { console.error(err); alert(`Failed to backup: ${err.message}`); setIsBackingUp(false); });
@@ -87,7 +88,15 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
     })
     .then(async res => {
       if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Bulk backup failed"); }
-      if (backupDestLocal) return res.blob();
+      
+      // If returning a ZIP, we check for a custom header if available, otherwise just blob it.
+      if (backupDestLocal) {
+        const backupStatus = res.headers.get('X-Backup-Status');
+        if (backupStatus === 'Partial-Failure') {
+          alert("Bulk backup finished with some errors. The downloaded ZIP contains error logs for the failed devices.");
+        }
+        return res.blob();
+      }
       return res.json();
     }) 
     .then(data => {
@@ -96,7 +105,10 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
         const a = document.createElement('a'); a.href = url;
         a.download = `${maintBackupPrefix ? maintBackupPrefix : 'Bulk'}_Archive_${getTimestamp()}.zip`;
         document.body.appendChild(a); a.click(); window.URL.revokeObjectURL(url); a.remove();
-      } else { alert("Bulk backup successfully saved on target devices."); }
+      } else { 
+        // Show the actual backend JSON message which respects the has_failures flag
+        alert(data.message || "Bulk backup completed."); 
+      }
       setIsBulkBackingUp(false); setMaintBackupSwitches([]); setMaintBackupRouters([]); setMaintBackupPrefix('');
     })
     .catch(err => { console.error(err); alert(`Error: ${err.message}`); setIsBulkBackingUp(false); });
@@ -120,14 +132,24 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
       method: 'POST', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: formData 
     })
     .then(async res => {
-      if (!res.ok) { const err = await res.json(); throw new Error(err.detail || "Restore failed"); }
+      // Check content type to parse errors correctly
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      if (!res.ok) { 
+        const err = isJson ? await res.json() : await res.text(); 
+        throw new Error(err.detail || err || "Restore validation failed"); 
+      }
       return res.json();
     })
     .then(data => {
-      alert("Restore process completed! Check your browser console for detailed logs.");
-      setIsRestoring(false); setMaintRestoreFile(null); setMaintRestoreSwitches([]); setMaintRestoreRouters([]);
+      // Alert actual backend message (Success vs Error)
+      if (data.success === false) {
+        alert(`Restore Error/Warning: ${data.message}\nCheck Event Logs for full output.`);
+      } else {
+        alert(data.message || "Restore process completed! Check your Event Logs for details.");
+      }
+      setIsRestoring(false); setMaintRestoreFile(''); setMaintRestoreUpload(null); setMaintRestoreSwitches([]); setMaintRestoreRouters([]);
     })
-    .catch(err => { console.error(err); alert("Restore failed. Check console."); setIsRestoring(false); });
+    .catch(err => { console.error(err); alert(`Restore Failed: ${err.message}`); setIsRestoring(false); });
   };
 
   const sortTargets = (a, b) => a.hostname.localeCompare(b.hostname, undefined, { numeric: true });
@@ -251,6 +273,7 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
           <h4 style={{ color: '#fff', marginBottom: '10px' }}>2. Select Target Devices</h4>
           <input type="text" placeholder="Search devices to restore..." value={maintRestoreSearch} onChange={(e) => setMaintRestoreSearch(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '15px', backgroundColor: '#1e1e1e', border: '1px solid #444', color: 'white', borderRadius: '4px' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {/* SWITCHES BLOCK */}
             <div style={{ backgroundColor: '#1e1e1e', border: '1px solid #444', borderRadius: '4px', overflow: 'hidden' }}>
               <div onClick={() => setIsRestoreSwitchesOpen(!isRestoreSwitchesOpen)} style={{ padding: '10px 15px', backgroundColor: '#2a2a2a', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: isRestoreSwitchesOpen ? '1px solid #444' : 'none' }}>
                 <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#ccc' }}>Switches ({maintRestoreSwitches.length} selected)</span><span style={{ fontSize: '0.8rem', color: '#888' }}>{isRestoreSwitchesOpen ? '▼' : '▶'}</span>
@@ -259,6 +282,19 @@ export default function ManualOperations({ devices, archiveFiles, userRole }) {
                 <div style={{ maxHeight: '150px', overflowY: 'auto', padding: '10px' }}>
                   {restoreFilteredSwitches.map(s => (
                     <label key={s.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', borderRadius: '4px', backgroundColor: maintRestoreSwitches.includes(s.hostname) ? '#007acc22' : 'transparent' }}><input type="checkbox" checked={maintRestoreSwitches.includes(s.hostname)} onChange={() => toggleSelection(s.hostname, maintRestoreSwitches, setMaintRestoreSwitches)} style={{ marginRight: '10px' }} /><span style={{ fontSize: '0.85rem' }}>{s.hostname}</span></label>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* ROUTERS BLOCK (Fix for missing router selection) */}
+            <div style={{ backgroundColor: '#1e1e1e', border: '1px solid #444', borderRadius: '4px', overflow: 'hidden' }}>
+              <div onClick={() => setIsRestoreRoutersOpen(!isRestoreRoutersOpen)} style={{ padding: '10px 15px', backgroundColor: '#2a2a2a', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: isRestoreRoutersOpen ? '1px solid #444' : 'none' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#ccc' }}>Routers ({maintRestoreRouters.length} selected)</span><span style={{ fontSize: '0.8rem', color: '#888' }}>{isRestoreRoutersOpen ? '▼' : '▶'}</span>
+              </div>
+              {isRestoreRoutersOpen && (
+                <div style={{ maxHeight: '150px', overflowY: 'auto', padding: '10px' }}>
+                  {restoreFilteredRouters.map(r => (
+                    <label key={r.id} style={{ display: 'flex', alignItems: 'center', padding: '6px', cursor: 'pointer', borderRadius: '4px', backgroundColor: maintRestoreRouters.includes(r.hostname) ? '#007acc22' : 'transparent' }}><input type="checkbox" checked={maintRestoreRouters.includes(r.hostname)} onChange={() => toggleSelection(r.hostname, maintRestoreRouters, setMaintRestoreRouters)} style={{ marginRight: '10px' }} /><span style={{ fontSize: '0.85rem' }}>{r.hostname}</span></label>
                   ))}
                 </div>
               )}

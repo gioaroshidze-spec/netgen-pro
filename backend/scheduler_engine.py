@@ -2,6 +2,8 @@ import os
 import io
 import zipfile
 import asyncio
+import re
+import json
 from datetime import datetime, timezone
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -16,12 +18,20 @@ from logger import log_event
 from ansible_engine import run_ansible_playbook
 
 from routers.auth import decrypt_secret
-# --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_netmiko_params
 
 # Initialize the APScheduler
 scheduler = BackgroundScheduler()
 ARCHIVE_DIR = "archive"
+
+def get_device_meta(device: models.NetworkDevice):
+    """Helper to format device data cleanly for the Event Logs UI."""
+    return {
+        "hostname": device.hostname,
+        "ip_address": device.ip_address,
+        "device_type": device.device_type,
+        "os_type": device.os_type
+    }
 
 def execute_scheduled_job(job_id: int, manual_run_by: str = None):
     """The actual worker function. Accepts manual_run_by to track manual executions."""
@@ -32,19 +42,28 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             return
 
         exec_type = "Manual Run" if manual_run_by else "Automated Schedule"
-        triggered_by = manual_run_by if manual_run_by else "Cron/Timer"
+        triggered_by = manual_run_by if manual_run_by else "System_Scheduler"
 
         print(f"\n[SCHEDULER] Waking up to execute Job {job_id}: {job.name} (Triggered by: {triggered_by})...")
         targets = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(job.target_devices)).all()
         
+        target_devices_payload = [get_device_meta(d) for d in targets]
+
         if not targets:
             job.last_run_status = "Failed (No valid targets)"
             job.last_run_time = datetime.now(timezone.utc)
             db.commit()
             return
 
+        # Determine readable schedule timing
+        schedule_timing = "Run Once"
+        if job.interval_hours:
+            schedule_timing = f"Recurring: Every {job.interval_hours} hours"
+        elif job.cron_day_of_week:
+            schedule_timing = f"Recurring: {job.cron_day_of_week} @ {job.cron_hour or '00'}:{job.cron_minute or '00'}"
+
         # ==========================================
-        # 1. EXECUTE BACKUP JOB (MULTI-VENDOR UPGRADE)
+        # 1. EXECUTE BACKUP JOB
         # ==========================================
         if job.job_type == 'backup':
             success_count = 0
@@ -57,7 +76,6 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
                     elif device.os_type in ['alcatel', 'alcatel-lucent']: 
                         show_cmd = "show configuration snapshot"
 
-                    # Fetch standardized, safe connection parameters
                     connection_params = get_netmiko_params(device)
                     
                     with ConnectHandler(**connection_params) as net_connect:
@@ -89,17 +107,23 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
                 except Exception as e:
                     print(f"[SCHEDULER] Error backing up {device.hostname}: {e}")
 
+            # Rich Audit Log for Scheduled Backups
+            exec_status = "Success" if success_count == len(targets) else "Partial Failure" if success_count > 0 else "Failed"
             log_event(
-                db=db, event_type="Maintenance", severity="INFO" if success_count > 0 else "ERROR", 
-                author="System",
-                target_devices=job.target_devices,
+                db=db, 
+                event_type="Maintenance", 
+                severity="SUCCESS" if success_count == len(targets) else "WARNING" if success_count > 0 else "ERROR", 
+                author="System_Scheduler",
+                target_devices=target_devices_payload,
                 details={
-                    "action": "Scheduled Backup Executed", 
-                    "execution_type": exec_type, 
-                    "triggered_by": triggered_by,
-                    "scheduled_by": job.created_by,
-                    "job_name": job.name, 
-                    "success_count": success_count
+                    "action": "Scheduled Job Execution", 
+                    "job_name": job.name,
+                    "job_type": "Automated Backup",
+                    "created_by": job.created_by,
+                    "enabled_by": triggered_by,
+                    "schedule_timing": schedule_timing,
+                    "execution_status": exec_status,
+                    "options": job.job_payload
                 }
             )
 
@@ -107,15 +131,10 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
         # 2. EXECUTE TEMPLATE PUSH
         # ==========================================
         elif job.job_type == 'template_push':
-            prompt_audit = f"Scheduled Job: {job.name} | Type: {exec_type} | Triggered By: {triggered_by} | Originally Scheduled By: {job.created_by}"
-            
             generator = run_ansible_playbook(
                 ai_config_data=job.job_payload.get('template_config', {}),
                 devices=targets,
-                db=db,
-                prompt=prompt_audit,
-                is_check_mode=False,
-                author="System"
+                is_check_mode=False
             )
             
             output_logs = ""
@@ -125,6 +144,49 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
             except Exception as e:
                 output_logs += f"\nError reading ansible stream: {str(e)}"
             
+            # Regex Surgery to extract errors and recap
+            clean_output = output_logs.replace("data: ", "").replace("\n\n", "\n")
+            parts = re.split(r'(?=TASK \[|PLAY RECAP)', clean_output)
+            
+            important_blocks = []
+            for i, part in enumerate(parts):
+                if "PLAY RECAP" in part:
+                    important_blocks.append(part.strip())
+                elif re.search(r'^[ \t]*(fatal|failed|skipping|\[ERROR\])', part, re.MULTILINE | re.IGNORECASE):
+                    important_blocks.append(part.strip())
+                elif i == 0 and re.search(r'(error|fatal)', part, re.IGNORECASE):
+                    important_blocks.append(part.strip())
+                    
+            final_ansible_log = "\n\n".join(important_blocks)
+            if not final_ansible_log.strip():
+                final_ansible_log = "--- NO ERRORS OR SKIPS DETECTED ---\n\n"
+                recap_idx = clean_output.rfind("PLAY RECAP")
+                if recap_idx != -1:
+                    final_ansible_log += clean_output[recap_idx:].strip()
+                else:
+                    final_ansible_log += clean_output[-1000:] if len(clean_output) > 1000 else clean_output
+
+            has_failures = bool(re.search(r'failed=[1-9]\d*|unreachable=[1-9]\d*', final_ansible_log)) or bool(re.search(r'^[ \t]*(fatal|failed|\[ERROR\])', final_ansible_log, re.MULTILINE | re.IGNORECASE))
+            
+            # Rich Audit Log for Scheduled Configurations
+            log_event(
+                db=db, 
+                event_type="Configuration", 
+                severity="ERROR" if has_failures else "SUCCESS", 
+                author="System_Scheduler",
+                target_devices=target_devices_payload,
+                details={
+                    "action": "Scheduled Job Execution", 
+                    "job_name": job.name,
+                    "job_type": "Automated Configuration",
+                    "created_by": job.created_by,
+                    "enabled_by": triggered_by,
+                    "schedule_timing": schedule_timing,
+                    "execution_status": "Failed" if has_failures else "Success",
+                    "generated_commands": json.dumps(job.job_payload.get('template_config', {}), indent=2),
+                    "ansible_logs": final_ansible_log.strip()
+                }
+            )
             print(f"[SCHEDULER] Template push {job.name} finished.")
 
         job.last_run_status = "Success"

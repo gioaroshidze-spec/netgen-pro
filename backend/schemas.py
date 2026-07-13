@@ -130,6 +130,7 @@ class SimulateConfigRequest(BaseModel):
     config_text: str
     switches: list[str]
     routers: list[str]
+    source_template: Optional[str] = None  # <-- ALLOWS THE TEMPLATE NAME THROUGH
 
 
 # --- EVENT LOG SCHEMAS ---
@@ -137,7 +138,7 @@ class EventLogCreate(BaseModel):
     event_type: str
     severity: str
     author: Optional[str] = "System"
-    target_devices: list[str] = []
+    target_devices: list[Any] = []
     details: dict = {}
 
 class EventLogResponse(EventLogCreate):
@@ -153,6 +154,7 @@ class TemplateCreate(BaseModel):
     name: str
     category: str
     payload: dict
+    prompt: Optional[str] = None  # <-- ALLOWS THE PROMPT THROUGH
 
 class TemplateResponse(TemplateCreate):
     id: int
@@ -161,7 +163,6 @@ class TemplateResponse(TemplateCreate):
 
     class Config:
         from_attributes = True
-
 
 # --- SCHEDULED JOBS SCHEMAS ---
 class ScheduledJobBase(BaseModel):

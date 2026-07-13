@@ -90,7 +90,8 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       body: JSON.stringify({
         name: templateName,
         category: templateCategory,
-        payload: parsedPayload
+        payload: parsedPayload,
+        prompt: aiPrompt  // <-- INJECTED PROMPT METADATA HERE
       })
     })
     .then(async res => {
@@ -136,7 +137,8 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           prompt: aiPrompt,
           config_text: generatedAiConfig,
           switches: selectedSwitches,
-          routers: selectedRouters
+          routers: selectedRouters,
+          source_template: loadedTemplate ? loadedTemplate.name : null // <-- INJECTED TEMPLATE LINEAGE HERE
         })
       });
 

@@ -9,13 +9,41 @@ import models
 # Re-import variables to decode the token manually
 from routers.auth import SECRET_KEY, ALGORITHM
 from routers.auth import decrypt_secret
+from logger import log_event
 
 router = APIRouter(tags=["CLI"])
+
+def log_cli_access(username: str, target_meta: dict, status: str, error_msg: str = None):
+    """
+    Briefly opens a DB session to log the CLI access event. 
+    This prevents holding a DB connection open for the duration of a 2-hour SSH session.
+    """
+    db = SessionLocal()
+    try:
+        details = {
+            "action": "Interactive CLI Session",
+            "mode": "Live SSH Terminal",
+            "execution_status": status
+        }
+        if error_msg:
+            details["error"] = error_msg
+
+        log_event(
+            db=db,
+            event_type="Configuration",
+            severity="INFO" if status == "Connected" else "ERROR",
+            author=username,
+            target_devices=[target_meta],
+            details=details
+        )
+    finally:
+        db.close()
+
 
 @router.websocket("/ws/cli/{device_id}")
 async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query(None)):
     
-    # --- NEW: MANUAL WEBSOCKET AUTHENTICATION ---
+    # --- MANUAL WEBSOCKET AUTHENTICATION ---
     if not token:
         await websocket.close(code=1008, reason="Missing Token")
         return
@@ -34,6 +62,18 @@ async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query
 
     db = SessionLocal()
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
+    
+    # Extract metadata before closing the DB session
+    if device:
+        target_meta = {
+            "hostname": device.hostname,
+            "ip_address": device.ip_address,
+            "device_type": device.device_type,
+            "os_type": device.os_type
+        }
+        password = decrypt_secret(device.encrypted_password)
+        user = device.username or "admin"
+    
     db.close()
 
     if not device:
@@ -47,19 +87,19 @@ async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query
     try:
         await websocket.send_text(f"\r\n[INFO] Initializing SSH connection to {device.hostname} ({device.ip_address})...\r\n")
 
-        password = decrypt_secret(device.encrypted_password)
-        user = device.username or "admin"
-
         await asyncio.to_thread(
             ssh.connect, hostname=device.ip_address, username=user,
             password=password, look_for_keys=False, allow_agent=False, timeout=10,
-            disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512'], 'keys': []} # <-- THE FIX: Re-enables legacy ssh-rsa host keys
+            disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512'], 'keys': []} # Re-enables legacy ssh-rsa host keys
         )
 
         channel = ssh.invoke_shell()
         channel.setblocking(0) 
 
         await websocket.send_text(f"\r\n[SUCCESS] Connected to {device.hostname}!\r\n")
+        
+        # --- AUDIT LOG: SUCCESSFUL ACCESS ---
+        log_cli_access(username, target_meta, "Connected")
 
         async def read_from_ws():
             try:
@@ -87,7 +127,10 @@ async def cli_websocket(websocket: WebSocket, device_id: int, token: str = Query
         for task in pending: task.cancel()
 
     except Exception as e:
+        # --- AUDIT LOG: FAILED ACCESS ---
+        log_cli_access(username, target_meta, "Failed", str(e))
         await websocket.send_text(f"\r\n[ERROR] SSH Connection Failed: {str(e)}\r\n")
+        
     finally:
         ssh.close()
         try: await websocket.close()
