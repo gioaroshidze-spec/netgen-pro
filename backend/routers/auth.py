@@ -30,11 +30,13 @@ def encrypt_secret(plain_text: str):
     return cipher_suite.encrypt(plain_text.encode()).decode()
 
 def decrypt_secret(cipher_text: str):
-    if not cipher_text: return os.getenv("DEVICE_PASSWORD", "Werfds123") # Fallback for old lab devices
+    # SECURED: Removed hardcoded "Werfds123" fallback
+    if not cipher_text: return None 
     try:
         return cipher_suite.decrypt(cipher_text.encode()).decode()
-    except:
-        return os.getenv("DEVICE_PASSWORD", "Werfds123")
+    except Exception:
+        # SECURED: Fail strictly instead of attempting login with hardcoded strings
+        raise ValueError("Decryption failed. Invalid AES key or corrupted payload.")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
@@ -77,7 +79,6 @@ def get_current_admin(current_user: models.User = Depends(get_current_user)):
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
-        # Optional: You could log failed login attempts here if you wanted a strict security trail
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password", headers={"WWW-Authenticate": "Bearer"})
     
     # Log successful login
