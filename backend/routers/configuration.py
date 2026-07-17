@@ -18,6 +18,33 @@ from logger import log_event
 router = APIRouter(tags=["Configuration Engine"])
 
 # ==========================================
+# --- STRICT ANSIBLE PAYLOAD SANITIZER ---
+# ==========================================
+def validate_ansible_payload(payload: dict):
+    """
+    Strictly enforces the JSON schema expected by the Ansible engine.
+    Prevents nested object injection, type mismatch crashes, and payload corruption.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("Root payload must be a JSON object mapping hostnames to commands.")
+    
+    for host, data in payload.items():
+        if not isinstance(data, dict):
+            raise ValueError(f"Data for host '{host}' must be a JSON object.")
+        
+        # Check for required keys and strict list types
+        if "config" not in data or not isinstance(data["config"], list):
+            raise ValueError(f"Host '{host}' is missing a valid 'config' list.")
+        if "exec" not in data or not isinstance(data["exec"], list):
+            raise ValueError(f"Host '{host}' is missing a valid 'exec' list.")
+        
+        # Ensure every element inside the lists is strictly a string
+        if not all(isinstance(cmd, str) for cmd in data["config"]):
+            raise ValueError(f"All 'config' commands for '{host}' must be strictly strings.")
+        if not all(isinstance(cmd, str) for cmd in data["exec"]):
+            raise ValueError(f"All 'exec' commands for '{host}' must be strictly strings.")
+
+# ==========================================
 # --- STREAM INTERCEPTOR & LOGGER ---
 # ==========================================
 def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_data: dict, devices: list, mode: str, author: str, source_template: str = None):
@@ -203,8 +230,11 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
         raise HTTPException(status_code=400, detail="No target devices selected.")
     try: 
         ai_config_data = json.loads(request.config_text)
+        validate_ansible_payload(ai_config_data) # <-- SANITIZED
     except json.JSONDecodeError: 
         raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
@@ -224,8 +254,11 @@ def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Dep
         raise HTTPException(status_code=400, detail="No target devices selected.")
     try: 
         ai_config_data = json.loads(request.config_text)
+        validate_ansible_payload(ai_config_data) # <-- SANITIZED
     except json.JSONDecodeError: 
         raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
     target_hostnames = request.switches + request.routers
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
