@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
-from passlib.context import CryptContext
 from pydantic import BaseModel
 import jwt
 import os
 import secrets
+import bcrypt  # NATIVE SOLUTION: Replaces unmaintained passlib wrapper
 from cryptography.fernet import Fernet 
 from database import get_db
 import models
@@ -21,7 +21,6 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 
 
 # --- AES-256 DEVICE ENCRYPTION ENGINE ---
-# Generates a persistent key, or uses a strict 32-byte url-safe base64 key
 ENCRYPTION_KEY = os.getenv("VNMS_ENCRYPTION_KEY", "uO1v_Zt5pU7N2F_cO2J-jX9kQ4vT1aL8wE5mY0zP_B8=")
 cipher_suite = Fernet(ENCRYPTION_KEY)
 
@@ -30,15 +29,25 @@ def encrypt_secret(plain_text: str):
     return cipher_suite.encrypt(plain_text.encode()).decode()
 
 def decrypt_secret(cipher_text: str):
-    # SECURED: Removed hardcoded "Werfds123" fallback
     if not cipher_text: return None 
     try:
         return cipher_suite.decrypt(cipher_text.encode()).decode()
     except Exception:
-        # SECURED: Fail strictly instead of attempting login with hardcoded strings
         raise ValueError("Decryption failed. Invalid AES key or corrupted payload.")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# --- NATIVE CRYPTOGRAPHIC HELPERS ---
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verifies plain text password against stored bcrypt hash, bypassing passlib internal loops."""
+    try:
+        return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+    except Exception:
+        return False
+
+def get_password_hash(password: str) -> str:
+    """Generates a secure salt and natively hashes the input text string."""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 router = APIRouter(tags=["Authentication"])
 
@@ -50,9 +59,6 @@ class UserCreateRequest(BaseModel):
 class PasswordChangeRequest(BaseModel):
     old_password: str
     new_password: str
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -95,7 +101,7 @@ def change_password(request: PasswordChangeRequest, db: Session = Depends(get_db
     if not verify_password(request.old_password, current_user.hashed_password): raise HTTPException(status_code=400, detail="Incorrect current password")
     if len(request.new_password) < 8: raise HTTPException(status_code=400, detail="New password must be at least 8 characters long")
     
-    current_user.hashed_password = pwd_context.hash(request.new_password)
+    current_user.hashed_password = get_password_hash(request.new_password)
     current_user.requires_password_change = False
     db.commit()
 
@@ -111,7 +117,7 @@ def change_password(request: PasswordChangeRequest, db: Session = Depends(get_db
 def create_new_user(request: UserCreateRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin)):
     if db.query(models.User).filter(models.User.username == request.username).first(): raise HTTPException(status_code=400, detail="Username already exists.")
     
-    new_user = models.User(username=request.username, hashed_password=pwd_context.hash(request.password), role=request.role, requires_password_change=True)
+    new_user = models.User(username=request.username, hashed_password=get_password_hash(request.password), role=request.role, requires_password_change=True)
     db.add(new_user)
     db.commit()
 
@@ -148,7 +154,7 @@ def admin_reset_password(user_id: int, request: schemas.AdminPasswordReset, db: 
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user: raise HTTPException(status_code=404)
     
-    user.hashed_password = pwd_context.hash(request.new_password)
+    user.hashed_password = get_password_hash(request.new_password)
     user.requires_password_change = True # Springs the trap on them!
     db.commit()
 
