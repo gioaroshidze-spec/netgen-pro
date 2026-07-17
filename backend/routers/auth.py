@@ -7,10 +7,13 @@ from pydantic import BaseModel
 import jwt
 import os
 import secrets
-from cryptography.fernet import Fernet # <-- NEW
+from cryptography.fernet import Fernet 
 from database import get_db
 import models
-import schemas # <-- NEW
+import schemas 
+
+# --- IMPORT THE LOGGER ---
+from logger import log_event
 
 # --- SECURED CONFIGURATION ---
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32)) 
@@ -74,7 +77,15 @@ def get_current_admin(current_user: models.User = Depends(get_current_user)):
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        # Optional: You could log failed login attempts here if you wanted a strict security trail
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect username or password", headers={"WWW-Authenticate": "Bearer"})
+    
+    # Log successful login
+    log_event(
+        db=db, event_type="System", severity="INFO", author=user.username,
+        target_devices=[], details={"action": "User Logged In", "role": user.role}
+    )
+
     access_token = create_access_token(data={"sub": user.username, "role": user.role})
     return {"access_token": access_token, "token_type": "bearer", "role": user.role, "requires_password_change": user.requires_password_change}
 
@@ -82,18 +93,32 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
 def change_password(request: PasswordChangeRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not verify_password(request.old_password, current_user.hashed_password): raise HTTPException(status_code=400, detail="Incorrect current password")
     if len(request.new_password) < 8: raise HTTPException(status_code=400, detail="New password must be at least 8 characters long")
+    
     current_user.hashed_password = pwd_context.hash(request.new_password)
     current_user.requires_password_change = False
     db.commit()
+
+    # Log the self-service password change
+    log_event(
+        db=db, event_type="System", severity="INFO", author=current_user.username,
+        target_devices=[], details={"action": "Self-Service Password Change Completed"}
+    )
     return {"message": "Password updated successfully. Network secured."}
 
 # --- ADMIN USER MANAGEMENT ENDPOINTS ---
 @router.post("/auth/users")
 def create_new_user(request: UserCreateRequest, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin)):
     if db.query(models.User).filter(models.User.username == request.username).first(): raise HTTPException(status_code=400, detail="Username already exists.")
+    
     new_user = models.User(username=request.username, hashed_password=pwd_context.hash(request.password), role=request.role, requires_password_change=True)
     db.add(new_user)
     db.commit()
+
+    # Log user creation
+    log_event(
+        db=db, event_type="System", severity="WARNING", author=current_admin.username,
+        target_devices=[], details={"action": "Created New User Account", "target_user": request.username, "assigned_role": request.role}
+    )
     return {"message": f"User '{request.username}' created successfully."}
 
 @router.get("/auth/users", response_model=list[schemas.UserResponse])
@@ -105,15 +130,30 @@ def delete_user(user_id: int, db: Session = Depends(get_db), current_admin: mode
     if current_admin.id == user_id: raise HTTPException(status_code=400, detail="Cannot delete your own account.")
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user: raise HTTPException(status_code=404)
+    
+    target_username = user.username
     db.delete(user)
     db.commit()
+
+    # Log user deletion
+    log_event(
+        db=db, event_type="System", severity="ERROR", author=current_admin.username,
+        target_devices=[], details={"action": "Deleted User Account", "target_user": target_username}
+    )
     return {"message": "User deleted"}
 
 @router.put("/auth/users/{user_id}/password")
 def admin_reset_password(user_id: int, request: schemas.AdminPasswordReset, db: Session = Depends(get_db), current_admin: models.User = Depends(get_current_admin)):
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user: raise HTTPException(status_code=404)
+    
     user.hashed_password = pwd_context.hash(request.new_password)
     user.requires_password_change = True # Springs the trap on them!
     db.commit()
+
+    # Log admin password reset
+    log_event(
+        db=db, event_type="System", severity="WARNING", author=current_admin.username,
+        target_devices=[], details={"action": "Admin Forced Password Reset", "target_user": user.username}
+    )
     return {"message": "User password reset successfully."}

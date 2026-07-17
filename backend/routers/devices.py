@@ -37,10 +37,17 @@ def create_device(device: schemas.DeviceCreate, db: Session = Depends(get_db), c
     db.commit()
     db.refresh(db_device)
     
+    # Fully enriched audit log
     log_event(
-        db=db, event_type="Inventory", severity="SUCCESS", author=current_user.username,
+        db=db, 
+        event_type="Inventory", 
+        severity="SUCCESS", 
+        author=current_user.username,
         target_devices=[db_device.hostname], 
-        details={"action": "Created new device", "ip_address": db_device.ip_address}
+        details={
+            "action": "Created new device", 
+            "parameters": device_data  # Dumps everything except the password
+        }
     )
     return db_device
 
@@ -67,7 +74,7 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
     update_data = device_update.model_dump(exclude_unset=True, exclude={"password"})
     for key, value in update_data.items():
         if getattr(db_device, key) != value:
-            changes[key] = value # Track what changed
+            changes[key] = {"old": getattr(db_device, key), "new": value} # Track exact differences
         setattr(db_device, key, value)
         
     if device_update.password:
@@ -79,7 +86,10 @@ def update_device(device_id: int, device_update: schemas.DeviceUpdate, db: Sessi
     
     if changes:
         log_event(
-            db=db, event_type="Inventory", severity="INFO", author=current_user.username,
+            db=db, 
+            event_type="Inventory", 
+            severity="INFO", 
+            author=current_user.username,
             target_devices=[db_device.hostname], 
             details={"action": "Updated device parameters", "changes": changes}
         )
@@ -97,8 +107,12 @@ def delete_device(device_id: int, db: Session = Depends(get_db), current_user: m
     db.commit()
     
     log_event(
-        db=db, event_type="Inventory", severity="WARNING", author=current_user.username,
-        target_devices=[hostname], details={"action": "Deleted device from inventory"}
+        db=db, 
+        event_type="Inventory", 
+        severity="WARNING", 
+        author=current_user.username,
+        target_devices=[hostname], 
+        details={"action": "Deleted device from inventory"}
     )
     return {"message": "Device deleted"}
 
@@ -109,7 +123,7 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
     def ping_device(device):
         clean_ip = device.ip_address.strip()
         
-        # --- THE FIX: CROSS-PLATFORM ICMP PING ---
+        # --- CROSS-PLATFORM ICMP PING ---
         ping_flag = '-n' if platform.system().lower() == 'windows' else '-c'
         command = ["ping", ping_flag, "1", clean_ip]
         
@@ -142,7 +156,7 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
             "is_legacy": getattr(device, 'is_legacy', False)
         }
 
-    # Blast out all pings simultaneously (Lightning fast)
+    # Blast out all pings simultaneously
     mapped_devices = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
         results = executor.map(ping_device, devices)

@@ -14,7 +14,7 @@ const CustomDeviceNode = ({ data }) => {
   const [imgError, setImgError] = useState(false); 
   const [telemetry, setTelemetry] = useState({ cpu: 'Fetching...', memory: 'Fetching...', uptime: 'Fetching...' });
   const [hasFetched, setHasFetched] = useState(false);
-  const hoverTimer = useRef(null); // <-- NEW: Hover DDoS Protection
+  const hoverTimer = useRef(null); 
   
   const isGhost = data.status === 'unmanaged';
   const isOnline = data.status === 'online';
@@ -24,7 +24,6 @@ const CustomDeviceNode = ({ data }) => {
   if (isGhost) iconSrc = ''; 
 
   const handleMouseEnter = () => {
-    // Wait 500ms before triggering the heavy Netmiko API call
     hoverTimer.current = setTimeout(() => {
       setIsHovered(true);
       if (!hasFetched && !isGhost && isOnline && data.full_device) {
@@ -38,7 +37,7 @@ const CustomDeviceNode = ({ data }) => {
   };
 
   const handleMouseLeave = () => {
-    clearTimeout(hoverTimer.current); // Cancel the API call if mouse leaves before 500ms
+    clearTimeout(hoverTimer.current); 
     setIsHovered(false);
   };
 
@@ -126,9 +125,23 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(err => console.error("Failed to load views:", err));
   }, []);
 
+  // --- UNLOCKED UI: Removed setActiveView(null) from toggle handlers ---
   const handleZoneToggle = (zoneId) => {
-    setActiveView(null); 
     setSelectedZones(prev => prev.includes(zoneId) ? prev.filter(z => z !== zoneId) : [...prev, zoneId]);
+  };
+
+  const handleFloorToggle = (floor) => {
+    const floorZoneIds = floor.zones.map(z => z.id);
+    const allChecked = floorZoneIds.every(id => selectedZones.includes(id));
+    if (allChecked) { setSelectedZones(prev => prev.filter(id => !floorZoneIds.includes(id))); } 
+    else { setSelectedZones(prev => [...new Set([...prev, ...floorZoneIds])]); }
+  };
+
+  const handleBuildingToggle = (bldg) => {
+    const bldgZoneIds = bldg.floors.flatMap(f => f.zones.map(z => z.id));
+    const allChecked = bldgZoneIds.every(id => selectedZones.includes(id));
+    if (allChecked) { setSelectedZones(prev => prev.filter(id => !bldgZoneIds.includes(id))); } 
+    else { setSelectedZones(prev => [...new Set([...prev, ...bldgZoneIds])]); }
   };
 
   const onConnect = useCallback((params) => {
@@ -168,22 +181,6 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     });
   };
 
-  const handleFloorToggle = (floor) => {
-    setActiveView(null);
-    const floorZoneIds = floor.zones.map(z => z.id);
-    const allChecked = floorZoneIds.every(id => selectedZones.includes(id));
-    if (allChecked) { setSelectedZones(prev => prev.filter(id => !floorZoneIds.includes(id))); } 
-    else { setSelectedZones(prev => [...new Set([...prev, ...floorZoneIds])]); }
-  };
-
-  const handleBuildingToggle = (bldg) => {
-    setActiveView(null);
-    const bldgZoneIds = bldg.floors.flatMap(f => f.zones.map(z => z.id));
-    const allChecked = bldgZoneIds.every(id => selectedZones.includes(id));
-    if (allChecked) { setSelectedZones(prev => prev.filter(id => !bldgZoneIds.includes(id))); } 
-    else { setSelectedZones(prev => [...new Set([...prev, ...bldgZoneIds])]); }
-  };
-
   const handleSaveView = () => {
     if (!newViewName) return alert("Please enter a name for your view.");
     const currentCoords = {};
@@ -202,6 +199,7 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     .catch(err => alert(`Failed to save view: ${err}`));
   };
 
+  // --- NEW: TRUE PUT REQUEST FOR UPDATING VIEWS ---
   const handleUpdateActiveView = () => {
     if (!activeView) return;
     const currentCoords = {};
@@ -212,12 +210,15 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
 
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` };
     
-    fetch(`${API_BASE}/topology/views/${activeView.id}`, { method: 'DELETE', headers })
-    .then(() => fetch(`${API_BASE}/topology/views`, { method: 'POST', headers, body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) }))
-    .then(res => res.json())
-    .then(newView => {
-      setSavedViews(prev => [...prev.filter(v => v.id !== activeView.id), newView]);
-      setActiveView(newView);
+    fetch(`${API_BASE}/topology/views/${activeView.id}`, { 
+      method: 'PUT', // Uses our new backend endpoint directly
+      headers, 
+      body: JSON.stringify({ name: activeView.name, zone_ids: selectedZones, coordinates: currentCoords }) 
+    })
+    .then(async res => { if (!res.ok) throw new Error(await res.text()); return res.json(); })
+    .then(updatedView => {
+      setSavedViews(prev => prev.map(v => v.id === updatedView.id ? updatedView : v));
+      setActiveView(updatedView);
       alert(`✅ View "${activeView.name}" updated successfully!`);
     })
     .catch(err => alert(`Failed to update view: ${err}`));
@@ -390,11 +391,11 @@ export default function Topology({ devices, userRole, setActiveTab, fetchNetwork
     })
     .then(data => { 
       alert(`✅ ${data.message}`); 
-      setTimeout(() => setIsDiscovering(false), 10000); // 10-second cooldown UI lock
+      setTimeout(() => setIsDiscovering(false), 10000); 
     })
     .catch(err => { 
       alert(`❌ Error: ${err.message}`);
-      setIsDiscovering(false); // Unlock immediately on error
+      setIsDiscovering(false); 
     }); 
   };
   

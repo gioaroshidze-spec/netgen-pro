@@ -203,7 +203,7 @@ def background_discovery(username: str):
             if key not in existing_map: db.add(edge)
 
         db.commit()
-        log_event(db=db, event_type="Inventory", severity="SUCCESS", author=username, target_devices=[], details={"action": "Automated Topology Discovery Completed", "edges_mapped": len(new_edges_list)})
+        log_event(db=db, event_type="Topology", severity="SUCCESS", author=username, target_devices=[], details={"action": "Automated Topology Discovery Completed", "edges_mapped": len(new_edges_list)})
 
     except Exception as e:
         db.rollback()
@@ -447,12 +447,95 @@ def save_topology_view(view: schemas.SavedViewCreate, db: Session = Depends(get_
     db.add(db_view)
     db.commit()
     db.refresh(db_view)
+
+    # Log the creation
+    log_event(
+        db=db, 
+        event_type="Topology", 
+        severity="INFO", 
+        author=current_user.username, 
+        target_devices=[], 
+        details={
+            "action": "Created Topology View", 
+            "view_name": db_view.name,
+            "original_author": current_user.username
+        }
+    )
+    return db_view
+
+# --- NEW: TRUE PUT ENDPOINT FOR EDITING VIEWS ---
+@router.put("/topology/views/{view_id}", response_model=schemas.SavedViewResponse)
+def update_topology_view(view_id: int, view: schemas.SavedViewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+    db_view = db.query(models.SavedTopologyView).filter(models.SavedTopologyView.id == view_id).first()
+    
+    if not db_view: 
+        raise HTTPException(status_code=404, detail="View not found")
+        
+    # Security: Ensure only the creator or an admin can edit
+    if db_view.user_id != current_user.id and current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Not authorized to edit this view")
+
+    # Fetch original author's username for the log
+    original_author_obj = db.query(models.User).filter(models.User.id == db_view.user_id).first()
+    original_author = original_author_obj.username if original_author_obj else "Unknown User"
+
+    # Apply all updates
+    db_view.name = view.name
+    db_view.zone_ids = view.zone_ids
+    db_view.coordinates = view.coordinates
+    
+    db.commit()
+    db.refresh(db_view)
+
+    # Log the genuine edit
+    log_event(
+        db=db, 
+        event_type="Topology", 
+        severity="INFO", 
+        author=current_user.username, 
+        target_devices=[], 
+        details={
+            "action": "Edited Topology View", 
+            "view_name": db_view.name,
+            "original_author": original_author,
+            "edited_by": current_user.username
+        }
+    )
+
     return db_view
 
 @router.delete("/topology/views/{view_id}")
 def delete_topology_view(view_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    db_view = db.query(models.SavedTopologyView).filter(models.SavedTopologyView.id == view_id, models.SavedTopologyView.user_id == current_user.id).first()
-    if not db_view: raise HTTPException(status_code=404)
+    db_view = db.query(models.SavedTopologyView).filter(models.SavedTopologyView.id == view_id).first()
+    
+    if not db_view: 
+        raise HTTPException(status_code=404, detail="View not found")
+        
+    # Security: Ensure standard users can only delete their own views, while admins can clean up any view
+    if db_view.user_id != current_user.id and current_user.role != 'admin':
+        raise HTTPException(status_code=403, detail="Not authorized to delete this view")
+
+    # Fetch original author's username for the log
+    original_author_obj = db.query(models.User).filter(models.User.id == db_view.user_id).first()
+    original_author = original_author_obj.username if original_author_obj else "Unknown User"
+    view_name = db_view.name
+
     db.delete(db_view)
     db.commit()
+
+    # Log the deletion and note who actually pulled the trigger
+    log_event(
+        db=db, 
+        event_type="Topology", 
+        severity="WARNING", 
+        author=current_user.username, 
+        target_devices=[], 
+        details={
+            "action": "Deleted Topology View", 
+            "view_name": view_name,
+            "original_author": original_author,
+            "deleted_by": current_user.username
+        }
+    )
+
     return {"message": "View deleted successfully."}
