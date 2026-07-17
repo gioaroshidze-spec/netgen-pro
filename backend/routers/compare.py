@@ -72,12 +72,14 @@ async def compare_configs(
         config1 = (await upload_file1.read()).decode('utf-8', errors='ignore')
         desc1 = upload_file1.filename
     elif archive_file1:
-        path1 = os.path.join(ARCHIVE_DIR, archive_file1)
+        # SECURED: Strip path traversal attempts
+        safe_file1 = os.path.basename(archive_file1)
+        path1 = os.path.join(ARCHIVE_DIR, safe_file1)
         if not os.path.exists(path1):
             raise HTTPException(status_code=404, detail="File 1 not found in archive.")
         with open(path1, "r", encoding="utf-8", errors="ignore") as f1:
             config1 = f1.read()
-        desc1 = archive_file1
+        desc1 = safe_file1
     else:
         raise HTTPException(status_code=400, detail="Missing File 1")
 
@@ -86,12 +88,14 @@ async def compare_configs(
         config2 = (await upload_file2.read()).decode('utf-8', errors='ignore')
         desc2 = upload_file2.filename
     elif archive_file2:
-        path2 = os.path.join(ARCHIVE_DIR, archive_file2)
+        # SECURED: Strip path traversal attempts
+        safe_file2 = os.path.basename(archive_file2)
+        path2 = os.path.join(ARCHIVE_DIR, safe_file2)
         if not os.path.exists(path2):
             raise HTTPException(status_code=404, detail="File 2 not found in archive.")
         with open(path2, "r", encoding="utf-8", errors="ignore") as f2:
             config2 = f2.read()
-        desc2 = archive_file2
+        desc2 = safe_file2
     else:
         raise HTTPException(status_code=400, detail="Missing File 2")
 

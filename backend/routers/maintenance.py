@@ -232,11 +232,15 @@ async def restore_devices(
                 with open(file_path, "wb") as f:
                     f.write(content)
             elif archive_file:
-                actual_filename = archive_file
-                source_path = os.path.join(ARCHIVE_DIR, archive_file)
+                # SECURED: Strip path traversal attempts from malicious payloads
+                safe_archive_file = os.path.basename(archive_file)
+                actual_filename = safe_archive_file
+                source_path = os.path.join(ARCHIVE_DIR, safe_archive_file)
+                
                 if not os.path.exists(source_path):
                     raise ValueError("Archive file not found on server.")
-                file_path = os.path.join(tmpdir, archive_file)
+                
+                file_path = os.path.join(tmpdir, safe_archive_file)
                 import shutil
                 shutil.copy2(source_path, file_path)
             else:
