@@ -1,18 +1,15 @@
-version: '3.8'
-
 services:
-  backend:
+  netgen-pro-backend:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    container_name: vnms-backend
+    container_name: netgen-pro-backend
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
       - ACTIVE_AI_MODEL=claude-opus-4-7
-      - VNMS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
-    # Only map the directories that NEED to change dynamically
+      - VNMS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://localhost:80
     volumes:
       - ./backend/archive:/app/archive
       - ./backend/host_vars:/app/host_vars
@@ -21,13 +18,13 @@ services:
       - ./backend/inventory.ini:/app/inventory.ini
       - ./backend/netgen.db:/app/netgen.db
 
-  frontend:
+  netgen-pro-frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: vnms-frontend
+    container_name: netgen-pro-frontend
     restart: unless-stopped
     ports:
       - "80:80"
     depends_on:
-      - backend
+      - netgen-pro-backend
