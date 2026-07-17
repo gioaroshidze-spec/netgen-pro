@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 import models
 from database import engine, SessionLocal
 from contextlib import asynccontextmanager
 import os
+import bcrypt  # NATIVE SOLUTION: Replaces the unmaintained passlib dependency
 
 # Import our routers and scheduler
 from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology, organization
@@ -43,12 +43,16 @@ app.add_middleware(
 )
 
 # --- SECURED: CREATE DEFAULT ADMIN USER ON STARTUP ---
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Now uses native cryptographic byte compilation to avoid passlib system crashes
 db = SessionLocal()
 admin_exists = db.query(models.User).filter(models.User.username == "admin").first()
 if not admin_exists:
     print("Creating default admin user...")
-    hashed_pw = pwd_context.hash("admin") # Default password is 'admin'
+    
+    # Secure native salt generation and hashing execution
+    salt = bcrypt.gensalt()
+    hashed_pw = bcrypt.hashpw("admin".encode('utf-8'), salt).decode('utf-8')
+    
     default_admin = models.User(
         username="admin", 
         hashed_password=hashed_pw, 
@@ -71,6 +75,7 @@ app.include_router(templates.router)
 app.include_router(cli.router)
 app.include_router(topology.router)
 app.include_router(organization.router)
+
 # Basic Health Check
 @app.get("/")
 def health_check():
