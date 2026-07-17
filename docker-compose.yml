@@ -1,24 +1,33 @@
-services:
-  netgen-pro-backend:
-    image: gioaro/netgen-pro-backend:1.0
-    container_name: netgen-pro-backend
-    restart: unless-stopped
-    env_file: .env
-    volumes:
-      # Persistent local database: ensures customer variables, profiles, and device entries are never lost during code updates
-      - ./client_data/netgen.db:/app/netgen.db
-      - ./client_data/archive:/app/archive
-      # Mount paths for dynamic generation playbooks and template blueprints
-      - ./client_data/host_vars:/app/host_vars
-      - ./client_data/group_vars:/app/group_vars
-      - ./client_data/templates:/app/templates
-      - ./client_data/inventory.ini:/app/inventory.ini
+version: '3.8'
 
-  netgen-pro-frontend:
-    image: gioaro/netgen-pro-frontend:1.0
-    container_name: netgen-pro-frontend
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: vnms-backend
     restart: unless-stopped
     ports:
-      - "${HOST_PORT}:80"
+      - "8000:8000"
+    environment:
+      - ACTIVE_AI_MODEL=claude-opus-4-7
+      - VNMS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
+    # Only map the directories that NEED to change dynamically
+    volumes:
+      - ./backend/archive:/app/archive
+      - ./backend/host_vars:/app/host_vars
+      - ./backend/group_vars:/app/group_vars
+      - ./backend/templates:/app/templates
+      - ./backend/inventory.ini:/app/inventory.ini
+      - ./backend/netgen.db:/app/netgen.db
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: vnms-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
     depends_on:
-      - netgen-pro-backend
+      - backend
