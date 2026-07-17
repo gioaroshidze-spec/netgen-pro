@@ -1,30 +1,24 @@
 services:
   netgen-pro-backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
+    image: gioaro/netgen-pro-backend:1.0
     container_name: netgen-pro-backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
-    environment:
-      - ACTIVE_AI_MODEL=claude-opus-4-7
-      - VNMS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://localhost:80
+    env_file: .env
     volumes:
-      - ./backend/archive:/app/archive
-      - ./backend/host_vars:/app/host_vars
-      - ./backend/group_vars:/app/group_vars
-      - ./backend/templates:/app/templates
-      - ./backend/inventory.ini:/app/inventory.ini
-      - ./backend/netgen.db:/app/netgen.db
+      # Persistent local database: ensures customer variables, profiles, and device entries are never lost during code updates
+      - ./client_data/netgen.db:/app/netgen.db
+      - ./client_data/archive:/app/archive
+      # Mount paths for dynamic generation playbooks and template blueprints
+      - ./client_data/host_vars:/app/host_vars
+      - ./client_data/group_vars:/app/group_vars
+      - ./client_data/templates:/app/templates
+      - ./client_data/inventory.ini:/app/inventory.ini
 
   netgen-pro-frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
+    image: gioaro/netgen-pro-frontend:1.0
     container_name: netgen-pro-frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${HOST_PORT}:80"
     depends_on:
       - netgen-pro-backend
