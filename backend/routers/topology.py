@@ -33,6 +33,20 @@ class ManualEdgeCreate(BaseModel):
 
 router = APIRouter(tags=["Topology & Power"])
 
+# ==========================================
+# --- INPUT SANITIZATION HELPER ---
+# ==========================================
+def sanitize_port(port: str) -> str:
+    """
+    Prevents Command Injection. Only allows alphanumeric characters,
+    forward slashes, hyphens, periods, and spaces.
+    Blocks newlines (\n), semicolons (;), and pipes (|).
+    """
+    if not re.match(r'^[a-zA-Z0-9\/\-\. ]+$', port):
+        raise HTTPException(status_code=400, detail="Invalid port name. Contains unauthorized characters.")
+    return port.strip()
+
+
 @router.get("/topology/edges", response_model=List[schemas.EdgeResponse])
 def get_topology_edges(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     return db.query(models.TopologyEdge).all()
@@ -327,6 +341,9 @@ def get_device_telemetry(device_id: int, db: Session = Depends(get_db), current_
 # ==========================================
 @router.get("/topology/pcap")
 def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    
+    safe_port = sanitize_port(port) # SANITIZED
+    
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
     if not device: raise HTTPException(status_code=404)
     if device.os_type != 'cisco': raise HTTPException(status_code=400, detail="Packet trace via SSH is only supported on Cisco IOS-XE.")
@@ -342,7 +359,7 @@ def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(
             net_connect.enable()
             net_connect.send_config_set([f"no monitor capture {capture_name}"])
             setup_cmds = [
-                f"monitor capture {capture_name} interface {port} both",
+                f"monitor capture {capture_name} interface {safe_port} both",
                 f"monitor capture {capture_name} match any",
                 f"monitor capture {capture_name} file location flash:{pcap_filename}",
             ]
@@ -356,7 +373,7 @@ def generate_and_download_pcap(device_id: int, port: str, db: Session = Depends(
             net_connect.send_config_set([f"no monitor capture {capture_name}"])
             net_connect.send_command_timing(f"delete flash:{pcap_filename}\n\n")
 
-        log_event(db=db, event_type="Maintenance", severity="INFO", author=current_user.username, target_devices=[device.hostname], details={"action": "Packet Trace", "port": port})
+        log_event(db=db, event_type="Maintenance", severity="INFO", author=current_user.username, target_devices=[device.hostname], details={"action": "Packet Trace", "port": safe_port})
         return FileResponse(path=local_filepath, media_type="application/vnd.tcpdump.pcap", filename=f"{device.hostname}_trace.pcap")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -408,27 +425,29 @@ def execute_port_action(request: PortOperationRequest, db: Session = Depends(get
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname == request.hostname).first()
     if not device: raise HTTPException(status_code=404)
 
+    safe_port = sanitize_port(request.port) # SANITIZED
+
     try:
         connection_params = get_netmiko_params(device)
         
         with ConnectHandler(**connection_params) as net_connect:
             if device.os_type == 'mikrotik':
-                if request.action == 'shutdown': net_connect.send_command(f"/interface disable [find name=\"{request.port}\"]")
-                elif request.action == 'no_shutdown': net_connect.send_command(f"/interface enable [find name=\"{request.port}\"]")
+                if request.action == 'shutdown': net_connect.send_command(f"/interface disable [find name=\"{safe_port}\"]")
+                elif request.action == 'no_shutdown': net_connect.send_command(f"/interface enable [find name=\"{safe_port}\"]")
                 elif request.action == 'bounce':
-                    net_connect.send_command(f"/interface disable [find name=\"{request.port}\"]")
+                    net_connect.send_command(f"/interface disable [find name=\"{safe_port}\"]")
                     time.sleep(2)
-                    net_connect.send_command(f"/interface enable [find name=\"{request.port}\"]")
+                    net_connect.send_command(f"/interface enable [find name=\"{safe_port}\"]")
             else:
                 net_connect.enable()
-                commands = [f"interface {request.port}"]
+                commands = [f"interface {safe_port}"]
                 if request.action == 'bounce': commands.extend(["shutdown", "no shutdown"])
                 elif request.action == 'shutdown': commands.append("shutdown")
                 elif request.action == 'no_shutdown': commands.append("no shutdown")
                 net_connect.send_config_set(commands)
             
-        log_event(db=db, event_type="Maintenance", severity="WARNING", author=current_user.username, target_devices=[device.hostname], details={"action": f"Port {request.action.upper()}", "port": request.port})
-        return {"message": f"Successfully executed {request.action} on {request.port}."}
+        log_event(db=db, event_type="Maintenance", severity="WARNING", author=current_user.username, target_devices=[device.hostname], details={"action": f"Port {request.action.upper()}", "port": safe_port})
+        return {"message": f"Successfully executed {request.action} on {safe_port}."}
 
     except Exception as e:
         log_event(db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, target_devices=[device.hostname], details={"action": "Port Action Failed", "error": str(e)})
@@ -463,7 +482,6 @@ def save_topology_view(view: schemas.SavedViewCreate, db: Session = Depends(get_
     )
     return db_view
 
-# --- NEW: TRUE PUT ENDPOINT FOR EDITING VIEWS ---
 @router.put("/topology/views/{view_id}", response_model=schemas.SavedViewResponse)
 def update_topology_view(view_id: int, view: schemas.SavedViewCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     db_view = db.query(models.SavedTopologyView).filter(models.SavedTopologyView.id == view_id).first()
