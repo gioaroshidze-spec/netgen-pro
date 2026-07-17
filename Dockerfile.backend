@@ -1,0 +1,43 @@
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
+
+# Set environment variables for non-interactive installs and pipx
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PIPX_HOME=/opt/pipx
+ENV PIPX_BIN_DIR=/usr/local/bin
+ENV PATH="/usr/local/bin:$PATH"
+
+# Install system dependencies required for SSH, Ansible, and ping
+RUN apt-get update && apt-get install -y \
+    sshpass \
+    iputils-ping \
+    pipx \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Replicate your local Ansible environment exactly
+RUN pipx install --include-deps ansible
+RUN pipx inject ansible paramiko
+RUN pipx inject ansible ansible-pylibssh
+
+# Install Cisco and Netcommon Galaxy Collections
+RUN ansible-galaxy collection install cisco.ios
+RUN ansible-galaxy collection install ansible.netcommon
+
+# Set the working directory for the API
+WORKDIR /app
+
+# Install Python API dependencies (FastAPI, SQLAlchemy, Netmiko, etc.)
+# Note: Adjust this list to match your actual requirements.txt
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the backend source code
+# This bakes the code into the image, preventing meddling!
+COPY backend/ .
+
+# Expose the FastAPI port
+EXPOSE 8000
+
+# Command to run the Uvicorn server
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

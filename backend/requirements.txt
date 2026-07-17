@@ -1,0 +1,36 @@
+# ==============================================================================
+# VNMS Core Backend Dependencies (FastAPI Ecosystem)
+# ==============================================================================
+
+# Core Framework & Server Engine
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+
+# Database ORM Layer
+sqlalchemy>=2.0.28
+
+# Task Scheduling & Telemetry Loops
+apscheduler>=3.10.4
+
+# Environment Variable Configuration
+python-dotenv>=1.0.1
+
+# ==============================================================================
+# Security, Encryption & Authentication
+# ==============================================================================
+PyJWT>=2.8.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.1.2
+cryptography>=42.0.5
+
+# ==============================================================================
+# Network Automation & Interactive SSH Terminals
+# ==============================================================================
+netmiko>=4.3.0
+paramiko>=3.4.0
+
+# ==============================================================================
+# AI Orchestration (Multi-LLM Unified Wrapper)
+# ==============================================================================
+litellm>=1.34.0
