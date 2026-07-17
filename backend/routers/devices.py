@@ -7,11 +7,23 @@ import re
 import platform
 import subprocess
 import concurrent.futures
+import ipaddress
 
 # --- NEW: IMPORT THE BOUNCERS ---
 from routers.auth import get_current_user, get_current_admin, encrypt_secret
 
 router = APIRouter(tags=["Inventory & Devices"])
+
+# ==========================================
+# --- SANITIZATION HELPER ---
+# ==========================================
+def is_valid_ip(ip_str: str) -> bool:
+    """Strictly validates if the string is a valid IPv4 or IPv6 address."""
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        return False
 
 # CREATE requires ADMIN
 @router.post("/device/", response_model=schemas.DeviceResponse)
@@ -122,6 +134,16 @@ def get_network_map(db: Session = Depends(get_db), current_user: models.User = D
     
     def ping_device(device):
         clean_ip = device.ip_address.strip()
+
+        # SECURED: Instantly reject invalid IPs to prevent system hangs and exploits
+        if not is_valid_ip(clean_ip):
+            return {
+                "id": device.id, "hostname": device.hostname, "ip_address": clean_ip,
+                "device_type": device.device_type, "os_type": device.os_type,
+                "username": device.username, "status": "offline", "latency": "Invalid IP",
+                "pos_x": device.pos_x, "pos_y": device.pos_y, "zone_id": device.zone_id,
+                "is_legacy": getattr(device, 'is_legacy', False)
+            }
         
         # --- CROSS-PLATFORM ICMP PING ---
         ping_flag = '-n' if platform.system().lower() == 'windows' else '-c'
