@@ -162,7 +162,7 @@ def generate_support_bundle(current_user: models.User = Depends(get_current_admi
             zip_file.writestr("backend_app.log", "No log file generated yet.")
 
         # 2. ADD & SANITIZE THE INVENTORY FILE
-        inventory_path = "client_data/inventory.ini"
+        inventory_path = "inventory.ini"
         if os.path.exists(inventory_path):
             with open(inventory_path, "r") as f:
                 inventory_data = f.read()
