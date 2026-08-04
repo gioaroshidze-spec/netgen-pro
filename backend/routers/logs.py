@@ -145,12 +145,20 @@ def log_csv_export(request: ExportLogRequest, db: Session = Depends(get_db), cur
 
 
 @router.get("/logs/support-bundle")
-def generate_support_bundle(current_user: models.User = Depends(get_current_admin)):
+def generate_support_bundle(
+    current_user: models.User = Depends(get_current_admin),
+    db: Session = Depends(get_db) # <-- INJECT DATABASE SESSION HERE
+):
     """
     Zips up the backend application logs and a sanitized inventory file for diagnostic support.
     Restricted to Admin users.
     """
-    # Create an in-memory zip file so we don't clutter the server hard drive
+    import os
+    import zipfile
+    import io
+    import re
+    from fastapi.responses import StreamingResponse
+    
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
@@ -167,7 +175,6 @@ def generate_support_bundle(current_user: models.User = Depends(get_current_admi
             with open(inventory_path, "r") as f:
                 inventory_data = f.read()
                 
-            # Regex to find ansible_password=... or ansible_become_password=... and redact it
             sanitized_inventory = re.sub(
                 r'(ansible_password|ansible_become_password)\s*=\s*[^\s]+', 
                 r'\1=********', 
@@ -177,11 +184,9 @@ def generate_support_bundle(current_user: models.User = Depends(get_current_admi
         else:
             zip_file.writestr("sanitized_inventory.ini", "Inventory file not found at path.")
             
-    # Reset buffer position to the beginning
     zip_buffer.seek(0)
 
-    # Log that the admin generated a bundle
-    db = SessionLocal()
+    # 3. Log that the admin generated a bundle safely using injected db
     log_event(
         db=db,
         event_type="System",
@@ -190,7 +195,6 @@ def generate_support_bundle(current_user: models.User = Depends(get_current_admi
         target_devices=[],
         details={"action": "Generated Diagnostic Support Bundle"}
     )
-    db.close()
 
     return StreamingResponse(
         zip_buffer, 
