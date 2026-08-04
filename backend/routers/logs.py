@@ -9,6 +9,11 @@ import models, schemas
 from typing import Optional
 from datetime import datetime, timedelta, timezone
 from routers.auth import get_current_user, get_current_admin
+import os
+import zipfile
+import io
+import re
+from fastapi.responses import StreamingResponse
 from logger import log_event
 
 router = APIRouter(tags=["Audit Logs"])
@@ -137,3 +142,58 @@ def log_csv_export(request: ExportLogRequest, db: Session = Depends(get_db), cur
         }
     )
     return {"status": "Logged successfully"}
+
+
+@router.get("/logs/support-bundle")
+def generate_support_bundle(current_user: models.User = Depends(get_current_admin)):
+    """
+    Zips up the backend application logs and a sanitized inventory file for diagnostic support.
+    Restricted to Admin users.
+    """
+    # Create an in-memory zip file so we don't clutter the server hard drive
+    zip_buffer = io.BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        
+        # 1. ADD THE BACKEND LOG FILE
+        if os.path.exists("backend_app.log"):
+            zip_file.write("backend_app.log", arcname="backend_app.log")
+        else:
+            zip_file.writestr("backend_app.log", "No log file generated yet.")
+
+        # 2. ADD & SANITIZE THE INVENTORY FILE
+        inventory_path = "client_data/inventory.ini"
+        if os.path.exists(inventory_path):
+            with open(inventory_path, "r") as f:
+                inventory_data = f.read()
+                
+            # Regex to find ansible_password=... or ansible_become_password=... and redact it
+            sanitized_inventory = re.sub(
+                r'(ansible_password|ansible_become_password)\s*=\s*[^\s]+', 
+                r'\1=********', 
+                inventory_data
+            )
+            zip_file.writestr("sanitized_inventory.ini", sanitized_inventory)
+        else:
+            zip_file.writestr("sanitized_inventory.ini", "Inventory file not found at path.")
+            
+    # Reset buffer position to the beginning
+    zip_buffer.seek(0)
+
+    # Log that the admin generated a bundle
+    db = SessionLocal()
+    log_event(
+        db=db,
+        event_type="System",
+        severity="WARNING",
+        author=current_user.username,
+        target_devices=[],
+        details={"action": "Generated Diagnostic Support Bundle"}
+    )
+    db.close()
+
+    return StreamingResponse(
+        zip_buffer, 
+        media_type="application/x-zip-compressed",
+        headers={"Content-Disposition": "attachment; filename=VNMS_Diagnostic_Bundle.zip"}
+    )

@@ -20,6 +20,7 @@ export default function EventLogs() {
   // --- DEEP SEARCH, EXPORT, & PURGE STATES ---
   const [deepSearch, setDeepSearch] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [isBundling, setIsBundling] = useState(false); // <-- NEW STATE FOR SUPPORT BUNDLE
   
   // Auto-Purge UI States
   const [purgeDays, setPurgeDays] = useState(60);
@@ -64,7 +65,6 @@ export default function EventLogs() {
         },
         body: JSON.stringify({ days })
       });
-      // Optional: Add a small toast/alert here if you want confirmation
     } catch (err) {
       console.error("Failed to update retention policy:", err);
     }
@@ -172,6 +172,32 @@ export default function EventLogs() {
     setShowExportModal(false);
   };
 
+  // --- NEW: SUPPORT BUNDLE LOGIC ---
+  const downloadSupportBundle = async () => {
+    setIsBundling(true);
+    try {
+      const res = await fetch(`${API_BASE}/logs/support-bundle`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      
+      if (!res.ok) throw new Error("Failed to generate support bundle.");
+      
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `VNMS_Diagnostic_Bundle_${new Date().toISOString().split('T')[0]}.zip`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Support bundle generation error:", err);
+      alert("Error generating support bundle. The backend endpoint might not be active yet.");
+    } finally {
+      setIsBundling(false);
+    }
+  };
+
   const toggleRow = (id) => setExpandedRow(prevRow => (prevRow === id ? null : id));
 
   const getSeverityColor = (severity) => {
@@ -220,7 +246,7 @@ export default function EventLogs() {
         </div>
       )}
 
-      {/* --- HEADER WITH AUTO-PURGE CONTROLS --- */}
+      {/* --- HEADER WITH AUTO-PURGE & BUNDLE CONTROLS --- */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '15px' }}>
         <h2 style={{ margin: 0 }}>System Audit Logs</h2>
         
@@ -265,6 +291,16 @@ export default function EventLogs() {
           </div>
 
           {/* ACTION BUTTONS */}
+          
+          {/* NEW: SUPPORT BUNDLE BUTTON */}
+          <button 
+            onClick={downloadSupportBundle} 
+            disabled={isBundling}
+            style={{ padding: '8px 15px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '4px', cursor: isBundling ? 'not-allowed' : 'pointer', fontWeight: 'bold', height: '36px', display: 'flex', alignItems: 'center', gap: '5px' }}
+          >
+            {isBundling ? '⏳ Generating...' : '🚑 Generate Support Bundle'}
+          </button>
+          
           <button onClick={() => setShowExportModal(true)} style={{ padding: '8px 15px', backgroundColor: '#e6a23c', color: 'black', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', height: '36px' }}>
             📥 Configure Export
           </button>

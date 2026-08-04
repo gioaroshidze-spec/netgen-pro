@@ -5,11 +5,24 @@ import models
 from database import engine, SessionLocal
 from contextlib import asynccontextmanager
 import os
-import bcrypt  # NATIVE SOLUTION: Replaces the unmaintained passlib dependency
+import bcrypt
+import logging
+from logging.handlers import RotatingFileHandler
 
 # Import our routers and scheduler
 from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology, organization
 from scheduler_engine import start_scheduler, scheduler # <-- NEW
+
+# --- INITIALIZE SYSTEM FILE LOGGER ---
+# This creates a log file that maxes out at 5MB, keeping 3 backups, so it never fills the hard drive.
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_file_handler = RotatingFileHandler('backend_app.log', maxBytes=5*1024*1024, backupCount=3)
+log_file_handler.setFormatter(log_formatter)
+
+# Attach to the root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(log_file_handler)
 
 # Initialize Database Engine
 models.Base.metadata.create_all(bind=engine)

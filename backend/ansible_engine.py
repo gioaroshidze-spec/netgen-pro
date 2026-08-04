@@ -2,6 +2,11 @@ import tempfile
 import subprocess
 import json
 import os
+import logging # <-- NEW: Import native logging
+
+# --- INITIALIZE LOGGER ---
+# This binds to the root logger we set up in main.py
+logger = logging.getLogger(__name__)
 
 # --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_ansible_inventory_vars
@@ -125,6 +130,9 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
 
         # 3. EXECUTE PLAYBOOK
         mode_text = "DRY-RUN SIMULATION (--check)" if is_check_mode else "LIVE PRODUCTION PUSH"
+        
+        logger.info(f"Starting Ansible Playbook Execution. Mode: {mode_text}") # <-- LOG START
+        
         yield "data: --- INITIALIZING VNMS MULTI-VENDOR ANSIBLE ENGINE ---\n\n"
         yield f"data: Target Devices: {', '.join([d.hostname for d in devices])}\n\n"
         yield f"data: OS Types Detected: {', '.join([os.upper() for os in os_types_present])}\n\n"
@@ -146,6 +154,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
 
         for line in process.stdout:
             clean_line = line.rstrip('\r\n')
+            logger.info(f"[ANSIBLE EXECUTION] {clean_line}") # <-- LOG EVERY LINE TO FILE
             yield f"data: {clean_line}\n\n"
 
         process.stdout.close()
@@ -153,6 +162,8 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
 
         yield "data: --------------------------------------------------\n\n"
         if process.returncode == 0:
+            logger.info("Ansible Playbook completed successfully with no errors.") # <-- LOG SUCCESS
             yield "data: PLAYBOOK COMPLETE: No errors detected.\n\n"
         else:
+            logger.error(f"Ansible Playbook failed with return code: {process.returncode}") # <-- LOG CRITICAL FAILURE
             yield "data: PLAYBOOK FINISHED WITH ERRORS.\n\n"
