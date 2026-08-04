@@ -40,10 +40,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="VNMS Central API", version="1.0", lifespan=lifespan)
 
 # --- THE SURGICAL INCISION: Dynamic CORS Origins ---
-# Pulls a comma-separated list from the environment, falling back to local dev ports.
+# Pulls a comma-separated list from the environment, falling back to local dev ports AND docker ports.
 cors_origins = os.getenv(
     "VNMS_ALLOWED_ORIGINS", 
-    "http://localhost:5173,http://127.0.0.1:5173"
+    "http://localhost:5173,http://127.0.0.1:5173,http://localhost,http://127.0.0.1"
 ).split(",")
 
 # Setup CORS for the React Frontend
