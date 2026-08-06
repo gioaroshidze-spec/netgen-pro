@@ -1,0 +1,33 @@
+2026-08-06 08:26:22,536 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: LIVE PRODUCTION PUSH
+2026-08-06 08:26:23,059 - [ANSIBLE] - 
+2026-08-06 08:26:23,060 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-06 08:26:23,074 - [ANSIBLE] - 
+2026-08-06 08:26:23,075 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-06 08:26:23,099 - [ANSIBLE] - skipping: [test]
+2026-08-06 08:26:23,104 - [ANSIBLE] - skipping: [test2]
+2026-08-06 08:26:26,997 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-06 08:26:26,998 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-06 08:26:26,998 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-06 08:26:26,998 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-06 08:26:26,999 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: No route to host
+2026-08-06 08:26:26,999 - [ANSIBLE] - Origin: /tmp/tmp44th9dsm/playbook.yaml:9:7
+2026-08-06 08:26:26,999 - [ANSIBLE] - 
+2026-08-06 08:26:26,999 - [ANSIBLE] - 7   tasks:
+2026-08-06 08:26:27,000 - [ANSIBLE] - 8
+2026-08-06 08:26:27,000 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-06 08:26:27,000 - [ANSIBLE] -         ^ column 7
+2026-08-06 08:26:27,000 - [ANSIBLE] - 
+2026-08-06 08:26:27,001 - [ANSIBLE] - fatal: [cctv_sw2]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: No route to host"}
+2026-08-06 08:26:27,001 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: No route to host"}
+2026-08-06 08:26:27,003 - [ANSIBLE] - 
+2026-08-06 08:26:27,003 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-06 08:26:27,017 - [ANSIBLE] - skipping: [test]
+2026-08-06 08:26:27,022 - [ANSIBLE] - skipping: [test2]
+2026-08-06 08:26:27,025 - [ANSIBLE] - 
+2026-08-06 08:26:27,025 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-06 08:26:27,026 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-06 08:26:27,026 - [ANSIBLE] - cctv_sw2                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-06 08:26:27,026 - [ANSIBLE] - test                       : ok=0    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-06 08:26:27,026 - [ANSIBLE] - test2                      : ok=0    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-06 08:26:27,026 - [ANSIBLE] - 
+2026-08-06 08:26:27,098 - [ANSIBLE] - Ansible Playbook failed with return code: 2

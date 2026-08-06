@@ -1,0 +1,4 @@
+2026-08-06 08:38:40,601 - root - CRITICAL - 🔥 CHAOS TEST: Simulated fatal backend crash!
+2026-08-06 08:38:40,602 - root - ERROR - This error bypassed Uvicorn and dropped straight into backend_app.log
+2026-08-06 08:38:54,947 - root - CRITICAL - 🔥 CHAOS TEST: Simulated fatal backend crash!
+2026-08-06 08:38:54,947 - root - ERROR - This error bypassed Uvicorn and dropped straight into backend_app.log
