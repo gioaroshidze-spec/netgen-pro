@@ -6,13 +6,12 @@ from sqlalchemy import cast, String
 from pydantic import BaseModel
 from database import get_db, SessionLocal
 import models, schemas
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime, timedelta, timezone
 from routers.auth import get_current_user, get_current_admin
 import os
 import zipfile
 import io
-import re
 from fastapi.responses import StreamingResponse
 from logger import log_event
 
@@ -24,6 +23,15 @@ RETENTION_DAYS = 60
 
 class RetentionConfig(BaseModel):
     days: int
+
+# --- NEW: FRONTEND LOG SCHEMAS ---
+class FrontendErrorLog(BaseModel):
+    time: str
+    error: str
+    stack: Optional[str] = None
+
+class SupportBundleRequest(BaseModel):
+    frontend_logs: List[FrontendErrorLog] = []
 
 @router.get("/logs/retention")
 def get_retention_policy(current_user: models.User = Depends(get_current_user)):
@@ -144,56 +152,55 @@ def log_csv_export(request: ExportLogRequest, db: Session = Depends(get_db), cur
     return {"status": "Logged successfully"}
 
 
-@router.get("/logs/support-bundle")
+@router.post("/logs/support-bundle")
 def generate_support_bundle(
+    request: SupportBundleRequest,
     current_user: models.User = Depends(get_current_admin),
-    db: Session = Depends(get_db) # <-- INJECT DATABASE SESSION HERE
+    db: Session = Depends(get_db)
 ):
     """
-    Zips up the backend application logs and a sanitized inventory file for diagnostic support.
+    Zips up the backend, frontend, and ansible logs for diagnostic support.
     Restricted to Admin users.
     """
-    import os
-    import zipfile
-    import io
-    import re
-    from fastapi.responses import StreamingResponse
-    
     zip_buffer = io.BytesIO()
     
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
         
         # 1. ADD THE BACKEND LOG FILE
         if os.path.exists("backend_app.log"):
-            zip_file.write("backend_app.log", arcname="backend_app.log")
+            zip_file.write("backend_app.log", arcname="backend.log")
         else:
-            zip_file.writestr("backend_app.log", "No log file generated yet.")
+            zip_file.writestr("backend.log", "No backend log file generated yet.")
 
-        # 2. ADD & SANITIZE THE INVENTORY FILE
-        inventory_path = "inventory.ini"
-        if os.path.exists(inventory_path):
-            with open(inventory_path, "r") as f:
-                inventory_data = f.read()
-                
-            sanitized_inventory = re.sub(
-                r'(ansible_password|ansible_become_password)\s*=\s*[^\s]+', 
-                r'\1=********', 
-                inventory_data
-            )
-            zip_file.writestr("sanitized_inventory.ini", sanitized_inventory)
+        # 2. ADD THE ANSIBLE LOG FILE
+        if os.path.exists("ansible.log"):
+            zip_file.write("ansible.log", arcname="ansible.log")
         else:
-            zip_file.writestr("sanitized_inventory.ini", "Inventory file not found at path.")
+            zip_file.writestr("ansible.log", "No ansible log file generated yet.")
+
+        # 3. CONSTRUCT & ADD THE FRONTEND LOG FILE ON THE FLY
+        frontend_log_content = "=== VNMS Frontend Error Logs ===\n\n"
+        if not request.frontend_logs:
+            frontend_log_content += "No frontend crashes recorded in local storage."
+        else:
+            for log in request.frontend_logs:
+                frontend_log_content += f"[{log.time}] ERROR: {log.error}\n"
+                if log.stack:
+                    frontend_log_content += f"STACK TRACE:\n{log.stack}\n"
+                frontend_log_content += "-" * 60 + "\n"
+        
+        zip_file.writestr("frontend.log", frontend_log_content)
             
     zip_buffer.seek(0)
 
-    # 3. Log that the admin generated a bundle safely using injected db
+    # Log that the admin generated a bundle
     log_event(
         db=db,
         event_type="System",
         severity="WARNING",
         author=current_user.username,
         target_devices=[],
-        details={"action": "Generated Diagnostic Support Bundle"}
+        details={"action": "Generated Diagnostic Support Bundle (Backend + Frontend + Ansible Logs)"}
     )
 
     return StreamingResponse(

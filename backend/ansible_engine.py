@@ -2,11 +2,20 @@ import tempfile
 import subprocess
 import json
 import os
-import logging # <-- NEW: Import native logging
+import logging
 
-# --- INITIALIZE LOGGER ---
-# This binds to the root logger we set up in main.py
-logger = logging.getLogger(__name__)
+# --- INITIALIZE DEDICATED ANSIBLE LOGGER ---
+# We create a specific logger for Ansible and stop it from leaking into backend.log
+ansible_logger = logging.getLogger("ansible_execution")
+ansible_logger.setLevel(logging.INFO)
+ansible_logger.propagate = False 
+
+# Ensure we don't attach duplicate handlers if the module reloads
+if not ansible_logger.handlers:
+    ansible_handler = logging.FileHandler("ansible.log")
+    ansible_formatter = logging.Formatter('%(asctime)s - [ANSIBLE] - %(message)s')
+    ansible_handler.setFormatter(ansible_formatter)
+    ansible_logger.addHandler(ansible_handler)
 
 # --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_ansible_inventory_vars
@@ -14,7 +23,7 @@ from connection_utils import get_ansible_inventory_vars
 def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
     """
     Executes Ansible, dynamically builds OS-specific task blocks, and streams output.
-    (Audit logging is now handled upstream by the stream_ansible_and_log wrapper).
+    All stdout/stderr is now silently trapped into ansible.log.
     """
     # Fix list-only AI outputs just in case
     for host, data in ai_config_data.items():
@@ -131,7 +140,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         # 3. EXECUTE PLAYBOOK
         mode_text = "DRY-RUN SIMULATION (--check)" if is_check_mode else "LIVE PRODUCTION PUSH"
         
-        logger.info(f"Starting Ansible Playbook Execution. Mode: {mode_text}") # <-- LOG START
+        ansible_logger.info(f"Starting Ansible Playbook Execution. Mode: {mode_text}")
         
         yield "data: --- INITIALIZING VNMS MULTI-VENDOR ANSIBLE ENGINE ---\n\n"
         yield f"data: Target Devices: {', '.join([d.hostname for d in devices])}\n\n"
@@ -154,7 +163,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
 
         for line in process.stdout:
             clean_line = line.rstrip('\r\n')
-            logger.info(f"[ANSIBLE EXECUTION] {clean_line}") # <-- LOG EVERY LINE TO FILE
+            ansible_logger.info(clean_line) # <-- TRAPPED IN ANSIBLE.LOG
             yield f"data: {clean_line}\n\n"
 
         process.stdout.close()
@@ -162,8 +171,8 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
 
         yield "data: --------------------------------------------------\n\n"
         if process.returncode == 0:
-            logger.info("Ansible Playbook completed successfully with no errors.") # <-- LOG SUCCESS
+            ansible_logger.info("Ansible Playbook completed successfully with no errors.")
             yield "data: PLAYBOOK COMPLETE: No errors detected.\n\n"
         else:
-            logger.error(f"Ansible Playbook failed with return code: {process.returncode}") # <-- LOG CRITICAL FAILURE
+            ansible_logger.error(f"Ansible Playbook failed with return code: {process.returncode}")
             yield "data: PLAYBOOK FINISHED WITH ERRORS.\n\n"

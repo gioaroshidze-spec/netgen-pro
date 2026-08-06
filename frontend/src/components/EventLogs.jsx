@@ -20,7 +20,7 @@ export default function EventLogs() {
   // --- DEEP SEARCH, EXPORT, & PURGE STATES ---
   const [deepSearch, setDeepSearch] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
-  const [isBundling, setIsBundling] = useState(false); // <-- NEW STATE FOR SUPPORT BUNDLE
+  const [isBundling, setIsBundling] = useState(false); 
   
   // Auto-Purge UI States
   const [purgeDays, setPurgeDays] = useState(60);
@@ -172,17 +172,31 @@ export default function EventLogs() {
     setShowExportModal(false);
   };
 
-  // --- NEW: SUPPORT BUNDLE LOGIC ---
+  // --- THE SURGICAL INCISION: UPDATED SUPPORT BUNDLE LOGIC ---
   const downloadSupportBundle = async () => {
     setIsBundling(true);
     try {
+      // 1. Grab the frontend crashes trapped by ErrorBoundary
+      let storedErrors = [];
+      try {
+        storedErrors = JSON.parse(localStorage.getItem('vnms_ui_errors') || '[]');
+      } catch (e) {
+        console.warn("Failed to parse local UI errors for the bundle.", e);
+      }
+
+      // 2. POST them to the backend so they get included in the zip
       const res = await fetch(`${API_BASE}/logs/support-bundle`, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}` 
+        },
+        body: JSON.stringify({ frontend_logs: storedErrors })
       });
       
       if (!res.ok) throw new Error("Failed to generate support bundle.");
       
+      // 3. Download the compiled zip file
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -190,6 +204,7 @@ export default function EventLogs() {
       a.download = `VNMS_Diagnostic_Bundle_${new Date().toISOString().split('T')[0]}.zip`;
       a.click();
       window.URL.revokeObjectURL(url);
+
     } catch (err) {
       console.error("Support bundle generation error:", err);
       alert("Error generating support bundle. The backend endpoint might not be active yet.");
@@ -292,7 +307,6 @@ export default function EventLogs() {
 
           {/* ACTION BUTTONS */}
           
-          {/* NEW: SUPPORT BUNDLE BUTTON */}
           <button 
             onClick={downloadSupportBundle} 
             disabled={isBundling}
