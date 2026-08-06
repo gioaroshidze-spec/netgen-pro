@@ -2,3 +2,57 @@
 2026-08-06 08:38:40,602 - root - ERROR - This error bypassed Uvicorn and dropped straight into backend_app.log
 2026-08-06 08:38:54,947 - root - CRITICAL - 🔥 CHAOS TEST: Simulated fatal backend crash!
 2026-08-06 08:38:54,947 - root - ERROR - This error bypassed Uvicorn and dropped straight into backend_app.log
+2026-08-06 11:30:13,648 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:30:13,660 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:30:13,670 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:30:13,836 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:30:14,232 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:30:14,365 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:32:50,455 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:32:51,153 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:32:51,560 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:32:52,323 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:32:52,775 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:32:52,906 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:35:16,788 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:35:16,794 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:35:16,818 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:35:16,982 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:35:17,291 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:35:17,551 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:38:34,412 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:38:35,110 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:38:35,516 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:38:36,276 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:38:36,701 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:38:36,875 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:39:48,469 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:39:48,978 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:40:19,958 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:40:19,959 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:40:19,970 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:40:20,117 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:40:20,678 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:40:20,741 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:43:52,238 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:43:52,945 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:43:52,970 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:43:53,527 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:43:53,690 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:43:53,727 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:45:23,125 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:45:23,126 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:45:23,138 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:45:23,302 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:45:23,821 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:45:23,901 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:55:29,463 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:55:29,470 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:55:29,473 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_6.8)
+2026-08-06 11:55:29,656 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:55:29,971 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:55:30,222 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:55:31,111 - paramiko.transport - INFO - Connected (version 2.0, client Cisco-1.25)
+2026-08-06 11:55:31,832 - paramiko.transport - INFO - Authentication (password) successful!
+2026-08-06 11:55:32,733 - LiteLLM - INFO - 
+LiteLLM completion() model= claude-opus-4-7; provider = anthropic
