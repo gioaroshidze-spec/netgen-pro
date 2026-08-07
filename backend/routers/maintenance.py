@@ -12,6 +12,7 @@ import asyncio
 from typing import Optional
 import concurrent.futures
 from logger import log_event
+from backup_service import build_backup_filename
 
 from routers.auth import get_current_admin
 from routers.auth import decrypt_secret
@@ -106,7 +107,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     custom_prefix = options.prefix.strip() if options.prefix else "Backup"
-    strict_filename = f"{custom_prefix}_{result['os_type']}_{result['dev_type']}_{result['hostname']}_{timestamp}.txt"
+    strict_filename = build_backup_filename(custom_prefix, result["os_type"], result["dev_type"], result["hostname"], timestamp)
     
     if options.save_archive:
         archive_path = os.path.join(ARCHIVE_DIR, strict_filename)
@@ -157,7 +158,7 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
             custom_prefix = request.options.prefix.strip() if request.options.prefix else "Backup"
             
             if res["success"]:
-                strict_filename = f"{custom_prefix}_{res['os_type']}_{res['dev_type']}_{res['hostname']}_{timestamp}.txt"
+                strict_filename = build_backup_filename(custom_prefix, res["os_type"], res["dev_type"], res["hostname"], timestamp)
                 
                 if request.options.save_archive:
                     archive_path = os.path.join(ARCHIVE_DIR, strict_filename)

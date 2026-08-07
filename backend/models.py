@@ -83,6 +83,32 @@ class EventLog(Base):
     target_devices = Column(JSON, default=list)  
     details = Column(JSON, default=dict)         
 
+class ConfigurationChange(Base):
+    __tablename__ = "configuration_changes"
+    id = Column(Integer, primary_key=True, index=True)
+    change_id = Column(String, unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_by = Column(String, nullable=False)
+    prompt = Column(String, nullable=True)
+    source_template = Column(String, nullable=True)
+    target_devices = Column(JSON, nullable=False)
+    config_payload = Column(JSON, nullable=False)
+    proposal_hash = Column(String, nullable=False)
+    status = Column(String, index=True, nullable=False, default="created")
+    simulation_started_at = Column(DateTime, nullable=True)
+    simulation_completed_at = Column(DateTime, nullable=True)
+    simulation_success = Column(Boolean, nullable=True)
+    simulated_by = Column(String, nullable=True)
+    simulation_override = Column(Boolean, nullable=False, default=False)
+    simulation_override_by = Column(String, nullable=True)
+    simulation_override_reason = Column(String, nullable=True)
+    simulation_override_at = Column(DateTime, nullable=True)
+    pre_backup_completed_at = Column(DateTime, nullable=True)
+    pre_backup_success = Column(Boolean, nullable=True)
+    pre_backup_files = Column(JSON, nullable=True)
+    deployed_at = Column(DateTime, nullable=True)
+    deployed_by = Column(String, nullable=True)
+
 class ConfiguraitonTemplate(Base):
     __tablename__ = "configuration_templates"
     id = Column(Integer, primary_key=True, index=True)

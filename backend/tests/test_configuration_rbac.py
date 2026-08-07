@@ -4,171 +4,251 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 import models
-from database import get_db
+from database import Base, get_db
 from routers import auth, configuration
+import backup_service
 
 
-class FakeQuery:
-    def __init__(self, results):
-        self.results = results
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def all(self):
-        return self.results
-
-    def first(self):
-        return self.results[0] if self.results else None
-
-
-class FakeDB:
-    def __init__(self, devices=None):
-        self.devices = devices or []
-
-    def query(self, model):
-        if model is models.NetworkDevice:
-            return FakeQuery(self.devices)
-        return FakeQuery([])
-
-
-def make_user(role):
+def user(role):
     return SimpleNamespace(id=1, username=f"{role}_user", role=role)
 
 
-def make_device(hostname="sw1"):
-    return SimpleNamespace(
-        hostname=hostname,
-        ip_address="192.0.2.10",
-        device_type="switch",
-        os_type="cisco",
-    )
+def payload(hosts=("sw1",)):
+    config = {host: {"config": [f"description {host}"], "exec": []} for host in hosts}
+    return {"prompt": "configure test ports", "config_text": json.dumps(config),
+            "switches": list(hosts), "routers": [], "source_template": "approved-template"}
 
 
-def request_payload():
-    config = {"sw1": {"config": ["interface Gi1/0/1"], "exec": []}}
-    return {
-        "prompt": "configure test interface",
-        "config_text": json.dumps(config),
-        "switches": ["sw1"],
-        "routers": [],
-        "source_template": "approved-template",
-    }
+def successful_stream(*args, **kwargs):
+    return iter(["data: PLAY RECAP\n\n", "data: sw1 : ok=1 changed=0 unreachable=0 failed=0\n\n",
+                 "data: PLAYBOOK COMPLETE: No errors detected.\n\n"])
 
 
 @pytest.fixture
-def client(monkeypatch):
+def env(monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(engine)
+    db = TestingSession()
+    db.add_all([
+        models.NetworkDevice(hostname="sw1", ip_address="192.0.2.1", device_type="switch",
+                             os_type="cisco", username="u", encrypted_password="x"),
+        models.NetworkDevice(hostname="r1", ip_address="192.0.2.2", device_type="router",
+                             os_type="mikrotik", username="u", encrypted_password="x"),
+    ])
+    db.commit()
     app = FastAPI()
     app.include_router(configuration.router)
-    app.dependency_overrides[get_db] = lambda: FakeDB([make_device()])
+    app.dependency_overrides[get_db] = lambda: db
+    monkeypatch.setattr(configuration, "run_ansible_playbook", successful_stream)
     monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
-
-    with TestClient(app) as test_client:
-        yield app, test_client
-
-    app.dependency_overrides.clear()
+    with TestClient(app) as client:
+        yield app, client, db
+    db.close()
 
 
-def test_push_without_authentication_returns_401(client):
-    _, test_client = client
-
-    response = test_client.post("/configuration/push", json=request_payload())
-
-    assert response.status_code == 401
+def simulate(app, client, role="viewer", body=None):
+    app.dependency_overrides[auth.get_current_user] = lambda: user(role)
+    return client.post("/configuration/simulate", json=body or payload(),
+                       headers={"Authorization": "Bearer token"})
 
 
-def test_push_as_viewer_returns_403_before_ansible(client, monkeypatch):
-    app, test_client = client
-    app.dependency_overrides[auth.get_current_user] = lambda: make_user("viewer")
+def test_viewer_simulation_creates_hashed_passed_record(env):
+    app, client, db = env
+    response = simulate(app, client)
+    assert response.status_code == 200
+    change_id = response.headers["x-vnms-change-id"]
+    change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
+    assert change.created_by == "viewer_user"
+    assert change.status == "simulation_passed"
+    assert change.simulation_success is True
+    assert len(change.proposal_hash) == 64
+    assert change.target_devices == ["sw1"]
+
+
+def test_failed_simulation_is_persisted(env, monkeypatch):
+    app, client, db = env
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: iter([
+        "data: PLAY RECAP\n\n", "data: sw1 : unreachable=0 failed=1\n\n",
+        "data: PLAYBOOK FINISHED WITH ERRORS.\n\n"]))
+    response = simulate(app, client)
+    change = db.query(models.ConfigurationChange).filter_by(
+        change_id=response.headers["x-vnms-change-id"]).one()
+    assert change.status == "simulation_failed"
+    assert change.simulation_success is False
+
+
+@pytest.mark.parametrize("body", [
+    payload(("sw1", "sw1")),
+    {**payload(), "config_text": json.dumps({"other": {"config": [], "exec": []}})},
+])
+def test_duplicate_or_divergent_targets_rejected(env, body):
+    app, client, _ = env
+    assert simulate(app, client, body=body).status_code == 400
+
+
+def test_hash_is_deterministic_and_binds_deployment_data():
+    config = {"sw1": {"config": ["a"], "exec": []}}
+    first = configuration.proposal_hash(config, ["sw1"], "t")
+    assert first == configuration.proposal_hash(config, ["sw1"], "t")
+    assert first != configuration.proposal_hash({"sw1": {"config": ["b"], "exec": []}}, ["sw1"], "t")
+    assert first != configuration.proposal_hash(config, ["sw1"], "other")
+
+
+def test_push_authentication_and_viewer_rbac_precede_side_effects(env, monkeypatch):
+    app, client, _ = env
     calls = []
-
-    def fake_run_ansible_playbook(*args, **kwargs):
-        calls.append((args, kwargs))
-        return iter(["data: should not run\n\n"])
-
-    monkeypatch.setattr(configuration, "run_ansible_playbook", fake_run_ansible_playbook)
-
-    response = test_client.post(
-        "/configuration/push",
-        json=request_payload(),
-        headers={"Authorization": "Bearer viewer-token"},
-    )
-
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Administrator privileges required."
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: calls.append(d))
+    assert client.post("/configuration/push", json={"change_id": "x"}).status_code == 401
+    app.dependency_overrides[auth.get_current_user] = lambda: user("viewer")
+    assert client.post("/configuration/push", json={"change_id": "x"},
+                       headers={"Authorization": "Bearer x"}).status_code == 403
     assert calls == []
 
 
-def test_push_as_admin_reaches_mocked_execution_boundary(client, monkeypatch):
-    app, test_client = client
-    app.dependency_overrides[auth.get_current_user] = lambda: make_user("admin")
+def test_unknown_change_is_404(env):
+    app, client, _ = env
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    assert client.post("/configuration/push", json={"change_id": "missing"},
+                       headers={"Authorization": "Bearer x"}).status_code == 404
+
+
+def test_admin_deploys_exact_stored_proposal_after_all_backups(env, monkeypatch):
+    app, client, db = env
+    response = simulate(app, client, role="admin")
+    change_id = response.headers["x-vnms-change-id"]
+    order, ansible_calls = [], []
+    def backups(devices):
+        order.append("backup")
+        return ({"sw1": "Pre_Config_cisco_switch_sw1_20260807_153500.txt"},
+                [{"hostname": "sw1", "success": True}])
+    def ansible(config, devices, is_check_mode=True):
+        order.append("ansible")
+        ansible_calls.append((config, [d.hostname for d in devices], is_check_mode))
+        return successful_stream()
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", backups)
+    monkeypatch.setattr(configuration, "run_ansible_playbook", ansible)
+    result = client.post("/configuration/push", json={"change_id": change_id},
+                         headers={"Authorization": "Bearer x"})
+    assert result.status_code == 200
+    assert order == ["backup", "ansible"]
+    change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
+    assert change.status == "deployed"
+    assert change.pre_backup_files["sw1"].startswith("Pre_Config_cisco_switch_sw1_")
+    assert ansible_calls == [(change.config_payload, ["sw1"], False)]
+    replay = client.post("/configuration/push", json={"change_id": change_id},
+                         headers={"Authorization": "Bearer x"})
+    assert replay.status_code == 409
+
+
+def test_push_schema_rejects_replacement_payload(env):
+    app, client, _ = env
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    response = client.post("/configuration/push", json=payload(),
+                           headers={"Authorization": "Bearer x"})
+    assert response.status_code == 422
+    assert client.post("/configuration/push", json={"change_id": "x", "config_text": "{}"},
+                       headers={"Authorization": "Bearer x"}).status_code == 422
+
+
+def test_preconfiguration_backup_uses_existing_filename_format(tmp_path, monkeypatch):
+    device = SimpleNamespace(hostname="SW1", os_type="cisco", device_type="switch")
+    monkeypatch.setattr(backup_service, "capture_running_configuration",
+                        lambda d: {"hostname": d.hostname, "success": True, "config": "version 1"})
+    files, results = backup_service.create_preconfiguration_backups(
+        [device], str(tmp_path), now=SimpleNamespace(strftime=lambda fmt: "20260807_153500"))
+    assert results[0]["success"] is True
+    assert files == {"SW1": "Pre_Config_cisco_switch_SW1_20260807_153500.txt"}
+    assert (tmp_path / files["SW1"]).read_text() == "version 1"
+
+
+def test_hash_mismatch_blocks_backup_and_ansible(env, monkeypatch):
+    app, client, db = env
+    response = simulate(app, client, role="admin")
+    change = db.query(models.ConfigurationChange).filter_by(
+        change_id=response.headers["x-vnms-change-id"]).one()
+    change.config_payload = {"sw1": {"config": ["tampered"], "exec": []}}
+    db.commit()
     calls = []
-
-    def fake_run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
-        calls.append({
-            "ai_config_data": ai_config_data,
-            "devices": devices,
-            "is_check_mode": is_check_mode,
-        })
-        return iter(["data: PLAY RECAP\n", "data: sw1 : ok=1 failed=0 unreachable=0\n\n"])
-
-    monkeypatch.setattr(configuration, "run_ansible_playbook", fake_run_ansible_playbook)
-
-    response = test_client.post(
-        "/configuration/push",
-        json=request_payload(),
-        headers={"Authorization": "Bearer admin-token"},
-    )
-
-    assert response.status_code == 200
-    assert calls
-    assert calls[0]["is_check_mode"] is False
-    assert calls[0]["devices"][0].hostname == "sw1"
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: calls.append("backup"))
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: calls.append("ansible"))
+    result = client.post("/configuration/push", json={"change_id": change.change_id},
+                         headers={"Authorization": "Bearer x"})
+    assert result.status_code == 409
+    assert calls == []
 
 
-def test_simulate_remains_accessible_to_viewer(client, monkeypatch):
-    app, test_client = client
-    app.dependency_overrides[auth.get_current_user] = lambda: make_user("viewer")
-    calls = []
+def test_failed_simulation_override_validation_and_success(env, monkeypatch):
+    app, client, db = env
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: iter([
+        "data: PLAY RECAP\n\n", "data: sw1 : failed=1 unreachable=0\n\n"]))
+    response = simulate(app, client, role="admin")
+    change_id = response.headers["x-vnms-change-id"]
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    headers = {"Authorization": "Bearer x"}
+    assert client.post("/configuration/push", json={"change_id": change_id}, headers=headers).status_code == 409
+    endpoint = f"/configuration/changes/{change_id}/override-simulation"
+    assert client.post(endpoint, json={"override_reason": "short"}, headers=headers).status_code == 422
+    side_effects, audit_events = [], []
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: side_effects.append("backup"))
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: side_effects.append("ansible"))
+    monkeypatch.setattr(configuration, "log_event", lambda **kwargs: audit_events.append(kwargs))
+    result = client.post(endpoint, json={
+        "override_reason": "Check mode unsupported in validated lab."}, headers=headers)
+    assert result.status_code == 200
+    assert result.json()["status"] == "admin_override_authorized"
+    assert side_effects == []
+    assert audit_events[-1]["severity"] == "WARNING"
+    change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
+    assert change.status == "admin_override_authorized"
+    assert change.simulation_override is True
+    assert change.simulation_override_by == "admin_user"
 
-    def fake_run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
-        calls.append({"is_check_mode": is_check_mode, "devices": devices})
-        return iter(["data: simulation complete\n\n"])
-
-    monkeypatch.setattr(configuration, "run_ansible_playbook", fake_run_ansible_playbook)
-
-    response = test_client.post(
-        "/configuration/simulate",
-        json=request_payload(),
-        headers={"Authorization": "Bearer viewer-token"},
-    )
-
-    assert response.status_code == 200
-    assert calls
-    assert calls[0]["is_check_mode"] is True
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: (
+        {"sw1": "Pre_Config_cisco_switch_sw1_20260807_153500.txt"},
+        [{"hostname": "sw1", "success": True}]))
+    monkeypatch.setattr(configuration, "run_ansible_playbook", successful_stream)
+    result = client.post("/configuration/push", json={"change_id": change_id}, headers=headers)
+    assert result.status_code == 200
 
 
-def test_generate_remains_protected_by_authentication(client, monkeypatch):
-    _, test_client = client
-    ai_calls = []
+def test_viewer_cannot_authorize_override_and_nonfailed_cannot_be_overridden(env, monkeypatch):
+    app, client, _ = env
+    passed = simulate(app, client, role="admin")
+    passed_id = passed.headers["x-vnms-change-id"]
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    headers = {"Authorization": "Bearer x"}
+    endpoint = f"/configuration/changes/{passed_id}/override-simulation"
+    assert client.post(endpoint, json={"override_reason": "A sufficiently long reason."}, headers=headers).status_code == 409
 
-    def fake_completion(*args, **kwargs):
-        ai_calls.append((args, kwargs))
-        return None
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: iter([
+        "data: PLAY RECAP\n\n", "data: sw1 : failed=1 unreachable=0\n\n"]))
+    failed = simulate(app, client, role="admin")
+    app.dependency_overrides[auth.get_current_user] = lambda: user("viewer")
+    endpoint = f"/configuration/changes/{failed.headers['x-vnms-change-id']}/override-simulation"
+    assert client.post(endpoint, json={"override_reason": "A sufficiently long reason."}, headers=headers).status_code == 403
 
-    monkeypatch.setattr(configuration, "completion", fake_completion)
 
-    response = test_client.post(
-        "/configuration/generate",
-        json={
-            "prompt": "create vlan 10",
-            "switches": [],
-            "routers": [],
-            "base_template": None,
-        },
-    )
-
-    assert response.status_code == 401
-    assert ai_calls == []
+def test_any_backup_failure_blocks_live_ansible_and_preserves_mapping(env, monkeypatch):
+    app, client, db = env
+    response = simulate(app, client, role="admin", body=payload(("sw1", "r1")))
+    change_id = response.headers["x-vnms-change-id"]
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    live_calls = []
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: (
+        {"sw1": "Pre_Config_cisco_switch_sw1_20260807_153500.txt"},
+        [{"hostname": "sw1", "success": True}, {"hostname": "r1", "success": False, "error": "timeout"}]))
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: live_calls.append(True))
+    result = client.post("/configuration/push", json={"change_id": change_id},
+                         headers={"Authorization": "Bearer x"})
+    assert result.status_code == 502
+    change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
+    assert change.status == "pre_backup_failed"
+    assert change.pre_backup_files["sw1"].startswith("Pre_Config_")
+    assert live_calls == []

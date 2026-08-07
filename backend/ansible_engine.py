@@ -3,6 +3,7 @@ import subprocess
 import json
 import os
 import logging
+import yaml
 
 # --- INITIALIZE DEDICATED ANSIBLE LOGGER ---
 # We create a specific logger for Ansible and stop it from leaking into backend.log
@@ -19,6 +20,22 @@ if not ansible_logger.handlers:
 
 # --- THE SURGICAL INCISION: Import our central connection wrapper ---
 from connection_utils import get_ansible_inventory_vars
+
+def build_ansible_inventory(devices):
+    return {
+        "all": {
+            "hosts": {
+                device.hostname: get_ansible_inventory_vars(device)
+                for device in devices
+            }
+        }
+    }
+
+def write_ansible_inventory(path, devices):
+    inventory = build_ansible_inventory(devices)
+    with open(path, "w", encoding="utf-8") as inventory_file:
+        yaml.safe_dump(inventory, inventory_file, sort_keys=False)
+    return inventory
 
 def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
     """
@@ -38,7 +55,6 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
         with open(vars_path, 'w') as f:
             json.dump({"ai_config": ai_config_data}, f)
 
-        inventory_data = {"all": {"hosts": {}}}
         os_types_present = set()
 
         # 1. BUILD MULTI-VENDOR INVENTORY USING CENTRAL WRAPPER
@@ -47,14 +63,7 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
             os_types_present.add(os_type)
             
             # The wrapper handles the MikroTik +cte1024w trick and privilege escalation
-            inventory_data["all"]["hosts"][dev.hostname] = get_ansible_inventory_vars(dev)
-        
-        with open(inventory_path, 'w') as f:
-            f.write("all:\n  hosts:\n")
-            for host, vars_dict in inventory_data["all"]["hosts"].items():
-                f.write(f"    {host}:\n")
-                for k, v in vars_dict.items():
-                    f.write(f"      {k}: {v}\n")
+        write_ansible_inventory(inventory_path, devices)
 
         # 2. DYNAMICALLY GENERATE PLAYBOOK TASKS
         tasks_yaml = ""

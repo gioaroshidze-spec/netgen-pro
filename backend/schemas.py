@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -131,6 +131,14 @@ class SimulateConfigRequest(BaseModel):
     switches: list[str]
     routers: list[str]
     source_template: Optional[str] = None  # <-- ALLOWS THE TEMPLATE NAME THROUGH
+
+class PushConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    change_id: str
+
+class SimulationOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    override_reason: str
 
 
 # --- EVENT LOG SCHEMAS ---

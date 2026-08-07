@@ -69,6 +69,13 @@ def get_ansible_inventory_vars(device):
         "ansible_ssh_common_args": "-o StrictHostKeyChecking=no"
     }
 
+    # Explicit, device-scoped compatibility for legacy SSH servers. Modern
+    # devices retain libssh's default algorithm policy.
+    if getattr(device, "is_legacy", False):
+        vars_dict["ansible_network_cli_ssh_type"] = "libssh"
+        vars_dict["ansible_libssh_key_exchange_algorithms"] = "+diffie-hellman-group14-sha1"
+        vars_dict["ansible_libssh_hostkeys"] = "ssh-rsa"
+
     # Privilege Escalation (MikroTik doesn't use standard enable)
     if os_type != "mikrotik":
         vars_dict["ansible_become"] = "yes"

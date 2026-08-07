@@ -18,6 +18,11 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   const [isSimulating, setIsSimulating] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
   const [terminalLogs, setTerminalLogs] = useState([]);
+  const [changeId, setChangeId] = useState(null);
+  const [simulationStatus, setSimulationStatus] = useState(null);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [isAuthorizingOverride, setIsAuthorizingOverride] = useState(false);
+  const changeIdRef = useRef(null);
   const terminalEndRef = useRef(null); 
 
   useEffect(() => {
@@ -33,6 +38,19 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     }
   }, [loadedTemplate]);
 
+  useEffect(() => {
+    setChangeId(null);
+    setSimulationStatus(null);
+    setOverrideReason('');
+  }, [selectedSwitches, selectedRouters, loadedTemplate]);
+
+  const invalidateSimulation = () => {
+    changeIdRef.current = null;
+    setChangeId(null);
+    setSimulationStatus(null);
+    setOverrideReason('');
+  };
+
   const handleGenerateConfig = () => {
     if (!aiPrompt) return alert("Please enter a prompt first.");
     if (selectedSwitches.length === 0 && selectedRouters.length === 0) {
@@ -40,6 +58,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     }
 
     setIsAiGenerating(true);
+    invalidateSimulation();
     fetch(`${API_BASE}/configuration/generate`, {
       method: 'POST',
       headers: { 
@@ -59,6 +78,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     })
     .then(data => {
       setGeneratedAiConfig(data.config);
+      invalidateSimulation();
       setIsAiGenerating(false);
       setIsEditing(false);
     })
@@ -110,13 +130,43 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     });
   };
 
+  const authorizeOverride = async () => {
+    if (!changeId || overrideReason.trim().length < 10) return;
+    const authorizingChangeId = changeId;
+    setIsAuthorizingOverride(true);
+    try {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/override-simulation`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ override_reason: overrideReason.trim() })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Override authorization failed.');
+      if (changeIdRef.current === authorizingChangeId) {
+        setSimulationStatus('override_authorized');
+        setTerminalLogs(prev => [...prev, data.message || 'Admin Override Authorized — Production Push Available']);
+      }
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+    } finally {
+      setIsAuthorizingOverride(false);
+    }
+  };
+
   const executeConfig = async (mode) => {
     if (!generatedAiConfig) return alert("Please generate a configuration first.");
     if (selectedSwitches.length === 0 && selectedRouters.length === 0) return alert("Please select target devices from the sidebar.");
 
     if (mode === 'push') {
       if (!canPush) return alert("Administrator privileges required for production deployment.");
-      const confirmPush = window.confirm("🚨 WARNING: You are about to push this configuration live to production devices. Are you absolutely sure?");
+      if (!changeId) return alert("Run a simulation before production deployment.");
+      const message = simulationStatus === 'override_authorized'
+        ? "WARNING: This deployment uses an authorized failed-simulation override.\n\nVNMS will capture mandatory Pre_Config backups, then deploy the exact stored proposal. Continue with elevated-risk deployment?"
+        : "🚨 WARNING: VNMS will capture Pre_Config backups in the server archive, then deploy the exact simulated proposal. Continue?";
+      const confirmPush = window.confirm(message);
       if (!confirmPush) return;
       setIsPushing(true);
     } else {
@@ -127,6 +177,10 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
 
     try {
       const endpoint = mode === 'push' ? '/configuration/push' : '/configuration/simulate';
+      const requestBody = mode === 'push'
+        ? { change_id: changeId }
+        : { prompt: aiPrompt, config_text: generatedAiConfig, switches: selectedSwitches, routers: selectedRouters,
+            source_template: loadedTemplate ? loadedTemplate.name : null };
       
       const response = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST',
@@ -134,13 +188,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           'Content-Type': 'application/json', 
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        body: JSON.stringify({
-          prompt: aiPrompt,
-          config_text: generatedAiConfig,
-          switches: selectedSwitches,
-          routers: selectedRouters,
-          source_template: loadedTemplate ? loadedTemplate.name : null // <-- INJECTED TEMPLATE LINEAGE HERE
-        })
+        body: JSON.stringify(requestBody)
       });
 
       if (!response.ok) {
@@ -152,14 +200,22 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       }
 
       const reader = response.body.getReader();
+      if (mode === 'simulate') {
+        const issuedChangeId = response.headers.get('X-VNMS-Change-ID');
+        changeIdRef.current = issuedChangeId;
+        setChangeId(issuedChangeId);
+      }
       const decoder = new TextDecoder("utf-8");
       let buffer = ""; 
+      let completeOutput = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        const decoded = decoder.decode(value, { stream: true });
+        buffer += decoded;
+        completeOutput += decoded;
         const parts = buffer.split('\n\n');
         buffer = parts.pop(); 
 
@@ -169,6 +225,13 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
             setTerminalLogs(prev => [...prev, cleanText]);
           }
         }
+      }
+      if (mode === 'simulate') {
+        const passed = completeOutput.includes('PLAY RECAP') && completeOutput.includes('PLAYBOOK COMPLETE: No errors detected.')
+          && !/failed=[1-9]\d*|unreachable=[1-9]\d*|fatal:/i.test(completeOutput);
+        setSimulationStatus(passed ? 'passed' : 'failed');
+      } else {
+        invalidateSimulation();
       }
     } catch (err) {
       console.error(err);
@@ -201,7 +264,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
             <div style={{ fontSize: '0.9rem', color: '#ccc', marginTop: '5px' }}>{loadedTemplate.description}</div>
             <div style={{ fontSize: '0.8rem', color: '#888', marginTop: '5px' }}>The AI will map this template to the targets selected in the sidebar based on your prompt.</div>
           </div>
-          <button onClick={() => { setLoadedTemplate(null); setGeneratedAiConfig(''); setAiPrompt(''); }} style={{ padding: '8px 15px', backgroundColor: 'transparent', color: '#007acc', border: '1px solid #007acc', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
+          <button onClick={() => { setLoadedTemplate(null); setGeneratedAiConfig(''); setAiPrompt(''); invalidateSimulation(); }} style={{ padding: '8px 15px', backgroundColor: 'transparent', color: '#007acc', border: '1px solid #007acc', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
             Clear Template
           </button>
         </div>
@@ -245,7 +308,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
         {isEditing ? (
           <textarea 
             value={generatedAiConfig}
-            onChange={(e) => setGeneratedAiConfig(e.target.value)}
+            onChange={(e) => { setGeneratedAiConfig(e.target.value); invalidateSimulation(); }}
             style={{ width: '100%', minHeight: '300px', backgroundColor: '#1e1e1e', color: '#d4d4d4', border: '1px solid #007acc', padding: '15px', borderRadius: '4px', resize: 'vertical', fontFamily: 'monospace', outline: 'none' }}
           />
         ) : (
@@ -288,13 +351,30 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           {canPush && (
             <button 
               onClick={() => executeConfig('push')} 
-              disabled={isBusy} 
-              style={{ padding: '10px 20px', backgroundColor: isBusy ? '#555' : '#d32f2f', color: isBusy ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: isBusy ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+              disabled={isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId}
+              style={{ padding: '10px 20px', backgroundColor: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#555' : '#d32f2f', color: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
             >
               {isPushing ? 'Deploying...' : '🚀 Push to Production'}
             </button>
           )}
         </div>
+        {canPush && simulationStatus === 'failed' && changeId && (
+          <div style={{ marginTop: '15px', padding: '15px', border: '1px solid #d32f2f', borderRadius: '4px', backgroundColor: '#d32f2f15' }}>
+            <strong style={{ color: '#ff6b6b' }}>Simulation failed — production is blocked by default.</strong>
+            <textarea value={overrideReason} onChange={e => setOverrideReason(e.target.value)} maxLength={1000}
+              placeholder="Required: explain why this failed simulation is safe to override"
+              style={{ width: '100%', minHeight: '80px', marginTop: '10px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #d32f2f', padding: '10px' }} />
+            <button onClick={authorizeOverride} disabled={isAuthorizingOverride || overrideReason.trim().length < 10}
+              style={{ marginTop: '10px', padding: '10px 20px', backgroundColor: '#d32f2f', color: 'white', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}>
+              {isAuthorizingOverride ? 'Authorizing...' : 'Authorize Override'}
+            </button>
+          </div>
+        )}
+        {canPush && simulationStatus === 'override_authorized' && (
+          <div style={{ marginTop: '15px', padding: '12px', border: '1px solid #e6a23c', borderRadius: '4px', color: '#e6a23c' }}>
+            Admin Override Authorized — Production Push Available
+          </div>
+        )}
       </div>
 
       {/* 3. TERMINAL OUTPUT BOX */}

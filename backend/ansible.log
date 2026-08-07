@@ -56,3 +56,141 @@
 2026-08-07 11:14:52,866 - [ANSIBLE] - cctv_sw2                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
 2026-08-07 11:14:52,866 - [ANSIBLE] - 
 2026-08-07 11:14:52,926 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 12:46:53,120 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 12:46:53,624 - [ANSIBLE] - 
+2026-08-07 12:46:53,625 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 12:46:53,641 - [ANSIBLE] - 
+2026-08-07 12:46:53,641 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 12:46:54,392 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 12:46:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 12:46:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 12:46:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 12:46:54,393 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]
+2026-08-07 12:46:54,394 - [ANSIBLE] - Origin: /tmp/tmpsd764p87/playbook.yaml:9:7
+2026-08-07 12:46:54,394 - [ANSIBLE] - 
+2026-08-07 12:46:54,394 - [ANSIBLE] - 7   tasks:
+2026-08-07 12:46:54,394 - [ANSIBLE] - 8
+2026-08-07 12:46:54,394 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 12:46:54,395 - [ANSIBLE] -         ^ column 7
+2026-08-07 12:46:54,395 - [ANSIBLE] - 
+2026-08-07 12:46:54,395 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]"}
+2026-08-07 12:46:54,395 - [ANSIBLE] - 
+2026-08-07 12:46:54,395 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 12:46:54,396 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 12:46:54,396 - [ANSIBLE] - 
+2026-08-07 12:46:54,456 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 12:48:59,185 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: LIVE PRODUCTION PUSH
+2026-08-07 12:48:59,533 - [ANSIBLE] - 
+2026-08-07 12:48:59,533 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 12:48:59,543 - [ANSIBLE] - 
+2026-08-07 12:48:59,544 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 12:49:00,227 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 12:49:00,227 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 12:49:00,227 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 12:49:00,228 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 12:49:00,228 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]
+2026-08-07 12:49:00,228 - [ANSIBLE] - Origin: /tmp/tmpkauvlcqn/playbook.yaml:9:7
+2026-08-07 12:49:00,228 - [ANSIBLE] - 
+2026-08-07 12:49:00,229 - [ANSIBLE] - 7   tasks:
+2026-08-07 12:49:00,229 - [ANSIBLE] - 8
+2026-08-07 12:49:00,229 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 12:49:00,229 - [ANSIBLE] -         ^ column 7
+2026-08-07 12:49:00,229 - [ANSIBLE] - 
+2026-08-07 12:49:00,230 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]"}
+2026-08-07 12:49:00,230 - [ANSIBLE] - 
+2026-08-07 12:49:00,230 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 12:49:00,230 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 12:49:00,230 - [ANSIBLE] - 
+2026-08-07 12:49:00,292 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 13:18:56,192 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 13:18:56,558 - [ANSIBLE] - 
+2026-08-07 13:18:56,559 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 13:18:56,569 - [ANSIBLE] - 
+2026-08-07 13:18:56,570 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 13:18:57,264 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 13:18:57,265 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:18:57,265 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:18:57,265 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 13:18:57,265 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]
+2026-08-07 13:18:57,266 - [ANSIBLE] - Origin: /tmp/tmpnwjp3prd/playbook.yaml:9:7
+2026-08-07 13:18:57,266 - [ANSIBLE] - 
+2026-08-07 13:18:57,266 - [ANSIBLE] - 7   tasks:
+2026-08-07 13:18:57,266 - [ANSIBLE] - 8
+2026-08-07 13:18:57,266 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 13:18:57,267 - [ANSIBLE] -         ^ column 7
+2026-08-07 13:18:57,267 - [ANSIBLE] - 
+2026-08-07 13:18:57,267 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method kex algos: server [diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1], client [mlkem768x25519-sha256,mlkem768nistp256-sha256,mlkem1024nistp384-sha384,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,diffie-hellman-group18-sha512,diffie-hellman-group16-sha512,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256]"}
+2026-08-07 13:18:57,267 - [ANSIBLE] - 
+2026-08-07 13:18:57,267 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 13:18:57,268 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 13:18:57,268 - [ANSIBLE] - 
+2026-08-07 13:18:57,328 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 13:49:21,200 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 13:49:21,763 - [ANSIBLE] - 
+2026-08-07 13:49:21,764 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 13:49:21,779 - [ANSIBLE] - 
+2026-08-07 13:49:21,780 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 13:49:22,534 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 13:49:22,534 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:49:22,535 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:49:22,535 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 13:49:22,535 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]
+2026-08-07 13:49:22,535 - [ANSIBLE] - Origin: /tmp/tmpcw8o1rbs/playbook.yaml:9:7
+2026-08-07 13:49:22,536 - [ANSIBLE] - 
+2026-08-07 13:49:22,536 - [ANSIBLE] - 7   tasks:
+2026-08-07 13:49:22,536 - [ANSIBLE] - 8
+2026-08-07 13:49:22,536 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 13:49:22,536 - [ANSIBLE] -         ^ column 7
+2026-08-07 13:49:22,537 - [ANSIBLE] - 
+2026-08-07 13:49:22,537 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]"}
+2026-08-07 13:49:22,537 - [ANSIBLE] - 
+2026-08-07 13:49:22,537 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 13:49:22,537 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 13:49:22,538 - [ANSIBLE] - 
+2026-08-07 13:49:22,600 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 13:52:22,819 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 13:52:23,182 - [ANSIBLE] - 
+2026-08-07 13:52:23,183 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 13:52:23,200 - [ANSIBLE] - 
+2026-08-07 13:52:23,200 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 13:52:23,894 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 13:52:23,895 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:52:23,895 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:52:23,895 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 13:52:23,896 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]
+2026-08-07 13:52:23,896 - [ANSIBLE] - Origin: /tmp/tmp3glzmz7i/playbook.yaml:9:7
+2026-08-07 13:52:23,896 - [ANSIBLE] - 
+2026-08-07 13:52:23,896 - [ANSIBLE] - 7   tasks:
+2026-08-07 13:52:23,896 - [ANSIBLE] - 8
+2026-08-07 13:52:23,897 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 13:52:23,897 - [ANSIBLE] -         ^ column 7
+2026-08-07 13:52:23,897 - [ANSIBLE] - 
+2026-08-07 13:52:23,897 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]"}
+2026-08-07 13:52:23,897 - [ANSIBLE] - 
+2026-08-07 13:52:23,897 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 13:52:23,898 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 13:52:23,898 - [ANSIBLE] - 
+2026-08-07 13:52:23,962 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 13:57:39,071 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 13:57:39,431 - [ANSIBLE] - 
+2026-08-07 13:57:39,432 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 13:57:39,443 - [ANSIBLE] - 
+2026-08-07 13:57:39,443 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 13:57:40,128 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 13:57:40,129 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:57:40,129 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 13:57:40,129 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 13:57:40,129 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]
+2026-08-07 13:57:40,130 - [ANSIBLE] - Origin: /tmp/tmp99y5zue0/playbook.yaml:9:7
+2026-08-07 13:57:40,130 - [ANSIBLE] - 
+2026-08-07 13:57:40,130 - [ANSIBLE] - 7   tasks:
+2026-08-07 13:57:40,130 - [ANSIBLE] - 8
+2026-08-07 13:57:40,130 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 13:57:40,131 - [ANSIBLE] -         ^ column 7
+2026-08-07 13:57:40,131 - [ANSIBLE] - 
+2026-08-07 13:57:40,131 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: kex error : no match for method server host key algo: server [ssh-rsa], client [ssh-ed25519,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256]"}
+2026-08-07 13:57:40,131 - [ANSIBLE] - 
+2026-08-07 13:57:40,131 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 13:57:40,132 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 13:57:40,132 - [ANSIBLE] - 
+2026-08-07 13:57:40,195 - [ANSIBLE] - Ansible Playbook failed with return code: 2

@@ -1,6 +1,9 @@
 import json
 import os
 import re
+import hashlib
+import uuid
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -14,6 +17,7 @@ from routers.auth import get_current_admin, get_current_user
 from ansible_engine import run_ansible_playbook
 from routers.auth import decrypt_secret
 from logger import log_event
+from backup_service import create_preconfiguration_backups
 
 router = APIRouter(tags=["Configuration Engine"])
 
@@ -47,7 +51,23 @@ def validate_ansible_payload(payload: dict):
 # ==========================================
 # --- STREAM INTERCEPTOR & LOGGER ---
 # ==========================================
-def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_data: dict, devices: list, mode: str, author: str, source_template: str = None):
+def proposal_hash(config_payload, target_devices, source_template=None):
+    canonical = {
+        "config_payload": config_payload,
+        "target_devices": sorted(target_devices),
+        "source_template": source_template,
+    }
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+def simulation_succeeded(output):
+    clean = output.replace("data: ", "").replace("\n\n", "\n")
+    has_recap = "PLAY RECAP" in clean
+    complete = "PLAYBOOK COMPLETE: No errors detected." in clean
+    failed = bool(re.search(r"failed=[1-9]\d*|unreachable=[1-9]\d*", clean, re.IGNORECASE))
+    fatal = bool(re.search(r"(^|\n)\s*(fatal|failed|\[ERROR\])", clean, re.IGNORECASE))
+    return has_recap and complete and not failed and not fatal
+
+def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_data: dict, devices: list, mode: str, author: str, source_template: str = None, change=None):
     """
     Wraps the Ansible output generator. Streams data to the frontend in real-time,
     and once finished, parses the recap, skips, and errors to save a rich audit log.
@@ -55,9 +75,13 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
     full_output = ""
     
     # 1. Yield chunks to the frontend exactly as they arrive
-    for chunk in ansible_stream:
-        full_output += chunk
-        yield chunk
+    try:
+        for chunk in ansible_stream:
+            full_output += chunk
+            yield chunk
+    except Exception as exc:
+        full_output += f"\ndata: [ERROR] {exc}\n\n"
+        yield f"data: [ERROR] {exc}\n\n"
 
     # 2. Once the stream finishes, clean the SSE formatting for parsing
     clean_output = full_output.replace("data: ", "").replace("\n\n", "\n")
@@ -87,7 +111,7 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
     final_ansible_log = final_ansible_log.strip()
 
     # 4. Determine strict Success/Fail status
-    has_failures = bool(re.search(r'failed=[1-9]\d*|unreachable=[1-9]\d*', final_ansible_log)) or bool(re.search(r'^[ \t]*(fatal|failed|\[ERROR\])', final_ansible_log, re.MULTILINE | re.IGNORECASE))
+    has_failures = not simulation_succeeded(full_output)
     final_severity = "ERROR" if has_failures else "SUCCESS"
     execution_status = "Failed" if has_failures else "Success"
 
@@ -110,6 +134,13 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
         "execution_status": execution_status,
         "ansible_logs": final_ansible_log
     }
+    if change:
+        details.update({"change_id": change.change_id, "proposal_hash": change.proposal_hash})
+        if mode == "Production Push":
+            details.update({
+                "pre_backup_files": change.pre_backup_files,
+                "simulation_gate": "failed_overridden" if change.simulation_override else "passed",
+            })
 
     # INJECT TEMPLATE TRACKING IF PRESENT
     if source_template:
@@ -124,6 +155,16 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
         target_devices=target_devices_payload,
         author=author
     )
+    if change:
+        now = datetime.now(timezone.utc)
+        if mode.startswith("Simulate"):
+            change.simulation_completed_at = now
+            change.simulation_success = not has_failures
+            change.status = "simulation_passed" if not has_failures else "simulation_failed"
+        else:
+            change.deployed_at = now if not has_failures else None
+            change.status = "deployed" if not has_failures else "deployment_failed"
+        db.commit()
 
 
 # ==========================================
@@ -237,37 +278,109 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
         raise HTTPException(status_code=400, detail=str(ve))
 
     target_hostnames = request.switches + request.routers
+    if len(target_hostnames) != len(set(target_hostnames)):
+        raise HTTPException(status_code=400, detail="Duplicate target hostnames are not allowed.")
+    normalized_targets = sorted(target_hostnames)
+    if set(ai_config_data) != set(normalized_targets):
+        raise HTTPException(status_code=400, detail="Configuration hostnames must exactly match selected targets.")
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
-    if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
+    if len(devices) != len(normalized_targets):
+        raise HTTPException(status_code=404, detail="One or more selected devices were not found in the database.")
 
     source_template = request.source_template
+    change = models.ConfigurationChange(
+        change_id=str(uuid.uuid4()), created_by=current_user.username, prompt=request.prompt,
+        source_template=source_template, target_devices=normalized_targets,
+        config_payload=ai_config_data,
+        proposal_hash=proposal_hash(ai_config_data, normalized_targets, source_template),
+        status="simulating", simulation_started_at=datetime.now(timezone.utc),
+        simulated_by=current_user.username,
+    )
+    db.add(change)
+    db.commit()
+    db.refresh(change)
     ansible_stream = run_ansible_playbook(ai_config_data, devices, is_check_mode=True)
 
     return StreamingResponse(
-        stream_ansible_and_log(ansible_stream, db, request.prompt, ai_config_data, devices, "Simulate (--check)", current_user.username, source_template), 
-        media_type="text/event-stream"
+        stream_ansible_and_log(ansible_stream, db, request.prompt, ai_config_data, devices, "Simulate (--check)", current_user.username, source_template, change),
+        media_type="text/event-stream", headers={"X-VNMS-Change-ID": change.change_id}
     )
 
 @router.post("/configuration/push")
-def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
-    if not request.switches and not request.routers:
-        raise HTTPException(status_code=400, detail="No target devices selected.")
-    try: 
-        ai_config_data = json.loads(request.config_text)
-        validate_ansible_payload(ai_config_data) # <-- SANITIZED
-    except json.JSONDecodeError: 
-        raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+def push_configuration(request: schemas.PushConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    change = db.query(models.ConfigurationChange).filter(models.ConfigurationChange.change_id == request.change_id).first()
+    if not change:
+        raise HTTPException(status_code=404, detail="Configuration change not found.")
+    if change.status in ("deployed", "deploying", "deployment_failed", "pre_backup_failed"):
+        raise HTTPException(status_code=409, detail="Configuration change has already been consumed.")
+    expected_hash = proposal_hash(change.config_payload, change.target_devices, change.source_template)
+    if expected_hash != change.proposal_hash:
+        log_event(db=db, event_type="Configuration", severity="ERROR", author=current_user.username,
+                  details={"action": "Proposal Integrity Failure", "change_id": change.change_id}, target_devices=[])
+        raise HTTPException(status_code=409, detail="Stored proposal integrity verification failed.")
+    if change.status not in ("simulation_passed", "admin_override_authorized"):
+        raise HTTPException(status_code=409, detail=f"Configuration change is not deployable from state '{change.status}'.")
 
-    target_hostnames = request.switches + request.routers
-    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
-    if not devices: raise HTTPException(status_code=404, detail="Selected devices not found in the database.")
-
-    source_template = request.source_template
-    ansible_stream = run_ansible_playbook(ai_config_data, devices, is_check_mode=False)
+    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(change.target_devices)).all()
+    if len(devices) != len(change.target_devices) or {d.hostname for d in devices} != set(change.target_devices):
+        raise HTTPException(status_code=409, detail="One or more stored target devices no longer exist.")
+    change.status = "awaiting_pre_backup"
+    db.commit()
+    files, backup_results = create_preconfiguration_backups(devices)
+    change.pre_backup_files = files
+    change.pre_backup_completed_at = datetime.now(timezone.utc)
+    failures = [r["hostname"] for r in backup_results if not r["success"]]
+    for result in backup_results:
+        log_event(db=db, event_type="Configuration", severity="SUCCESS" if result["success"] else "ERROR",
+                  author=current_user.username, target_devices=[result["hostname"]],
+                  details={"action": "Pre-Configuration Backup", "change_id": change.change_id,
+                           "target": result["hostname"], "success": result["success"],
+                           "filename": files.get(result["hostname"]), "error": result.get("error")})
+    if failures:
+        change.pre_backup_success = False
+        change.status = "pre_backup_failed"
+        db.commit()
+        raise HTTPException(status_code=502, detail={"message": "Pre-configuration backup failed; deployment blocked.", "failed_targets": failures})
+    change.pre_backup_success = True
+    change.status = "deploying"
+    change.deployed_by = current_user.username
+    db.commit()
+    ansible_stream = run_ansible_playbook(change.config_payload, devices, is_check_mode=False)
 
     return StreamingResponse(
-        stream_ansible_and_log(ansible_stream, db, request.prompt, ai_config_data, devices, "Production Push", current_user.username, source_template), 
+        stream_ansible_and_log(ansible_stream, db, change.prompt, change.config_payload, devices, "Production Push", current_user.username, change.source_template, change),
         media_type="text/event-stream"
     )
+
+@router.post("/configuration/changes/{change_id}/override-simulation")
+def authorize_simulation_override(
+    change_id: str,
+    request: schemas.SimulationOverrideRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = db.query(models.ConfigurationChange).filter(models.ConfigurationChange.change_id == change_id).first()
+    if not change:
+        raise HTTPException(status_code=404, detail="Configuration change not found.")
+    if change.status != "simulation_failed":
+        raise HTTPException(status_code=409, detail="Only a failed simulation can be overridden.")
+    expected_hash = proposal_hash(change.config_payload, change.target_devices, change.source_template)
+    if expected_hash != change.proposal_hash:
+        log_event(db=db, event_type="Configuration", severity="ERROR", author=current_user.username,
+                  details={"action": "Proposal Integrity Failure", "change_id": change.change_id}, target_devices=[])
+        raise HTTPException(status_code=409, detail="Stored proposal integrity verification failed.")
+    reason = request.override_reason.strip()
+    if not 10 <= len(reason) <= 1000:
+        raise HTTPException(status_code=422, detail="Override reason must be between 10 and 1000 characters.")
+    change.simulation_override = True
+    change.simulation_override_by = current_user.username
+    change.simulation_override_reason = reason
+    change.simulation_override_at = datetime.now(timezone.utc)
+    change.status = "admin_override_authorized"
+    db.commit()
+    log_event(db=db, event_type="Configuration", severity="WARNING", author=current_user.username,
+              details={"action": "Simulation Failed — Admin Override Authorized", "change_id": change.change_id,
+                       "proposal_hash": change.proposal_hash, "override_reason": reason,
+                       "simulation_state": "failed"}, target_devices=change.target_devices)
+    return {"change_id": change.change_id, "status": "admin_override_authorized",
+            "message": "Admin Override Authorized — Production Push Available"}
