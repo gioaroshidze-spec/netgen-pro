@@ -10,7 +10,7 @@ from litellm import completion
 from netmiko import ConnectHandler
 
 # --- IMPORT THE BOUNCERS ---
-from routers.auth import get_current_user
+from routers.auth import get_current_admin, get_current_user
 from ansible_engine import run_ansible_playbook
 from routers.auth import decrypt_secret
 from logger import log_event
@@ -249,7 +249,7 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
     )
 
 @router.post("/configuration/push")
-def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
+def push_configuration(request: schemas.SimulateConfigRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
     if not request.switches and not request.routers:
         raise HTTPException(status_code=400, detail="No target devices selected.")
     try: 

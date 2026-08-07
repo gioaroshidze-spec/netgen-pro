@@ -31,3 +31,28 @@
 2026-08-06 08:26:27,026 - [ANSIBLE] - test2                      : ok=0    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
 2026-08-06 08:26:27,026 - [ANSIBLE] - 
 2026-08-06 08:26:27,098 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-07 11:14:48,557 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-07 11:14:49,049 - [ANSIBLE] - 
+2026-08-07 11:14:49,050 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-07 11:14:49,063 - [ANSIBLE] - 
+2026-08-07 11:14:49,064 - [ANSIBLE] - TASK [(CISCO) Apply Configuration] *********************************************
+2026-08-07 11:14:52,860 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-07 11:14:52,861 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 11:14:52,861 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-07 11:14:52,862 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-07 11:14:52,862 - [ANSIBLE] - [ERROR]: Task failed: Action failed: ssh connection failed: ssh connect failed: No route to host
+2026-08-07 11:14:52,862 - [ANSIBLE] - Origin: /tmp/tmpfo63ogst/playbook.yaml:9:7
+2026-08-07 11:14:52,863 - [ANSIBLE] - 
+2026-08-07 11:14:52,863 - [ANSIBLE] - 7   tasks:
+2026-08-07 11:14:52,863 - [ANSIBLE] - 8
+2026-08-07 11:14:52,864 - [ANSIBLE] - 9     - name: (CISCO) Apply Configuration
+2026-08-07 11:14:52,864 - [ANSIBLE] -         ^ column 7
+2026-08-07 11:14:52,864 - [ANSIBLE] - 
+2026-08-07 11:14:52,865 - [ANSIBLE] - fatal: [cctv_sw1]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: No route to host"}
+2026-08-07 11:14:52,865 - [ANSIBLE] - fatal: [cctv_sw2]: FAILED! => {"changed": false, "msg": "ssh connection failed: ssh connect failed: No route to host"}
+2026-08-07 11:14:52,865 - [ANSIBLE] - 
+2026-08-07 11:14:52,865 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-07 11:14:52,866 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 11:14:52,866 - [ANSIBLE] - cctv_sw2                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
+2026-08-07 11:14:52,866 - [ANSIBLE] - 
+2026-08-07 11:14:52,926 - [ANSIBLE] - Ansible Playbook failed with return code: 2
