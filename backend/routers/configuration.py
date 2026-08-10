@@ -14,7 +14,7 @@ from netmiko import ConnectHandler
 
 # --- IMPORT THE BOUNCERS ---
 from routers.auth import get_current_admin, get_current_user
-from ansible_engine import run_ansible_playbook
+from ansible_engine import normalize_ansible_payload, run_ansible_playbook
 from routers.auth import decrypt_secret
 from logger import log_event
 from backup_service import create_preconfiguration_backups
@@ -24,29 +24,12 @@ router = APIRouter(tags=["Configuration Engine"])
 # ==========================================
 # --- STRICT ANSIBLE PAYLOAD SANITIZER ---
 # ==========================================
-def validate_ansible_payload(payload: dict):
+def validate_ansible_payload(payload: dict, devices):
     """
-    Strictly enforces the JSON schema expected by the Ansible engine.
-    Prevents nested object injection, type mismatch crashes, and payload corruption.
+    Strictly validates the payload through the same vendor-aware normalization
+    boundary used by both check-mode simulation and live production execution.
     """
-    if not isinstance(payload, dict):
-        raise ValueError("Root payload must be a JSON object mapping hostnames to commands.")
-    
-    for host, data in payload.items():
-        if not isinstance(data, dict):
-            raise ValueError(f"Data for host '{host}' must be a JSON object.")
-        
-        # Check for required keys and strict list types
-        if "config" not in data or not isinstance(data["config"], list):
-            raise ValueError(f"Host '{host}' is missing a valid 'config' list.")
-        if "exec" not in data or not isinstance(data["exec"], list):
-            raise ValueError(f"Host '{host}' is missing a valid 'exec' list.")
-        
-        # Ensure every element inside the lists is strictly a string
-        if not all(isinstance(cmd, str) for cmd in data["config"]):
-            raise ValueError(f"All 'config' commands for '{host}' must be strictly strings.")
-        if not all(isinstance(cmd, str) for cmd in data["exec"]):
-            raise ValueError(f"All 'exec' commands for '{host}' must be strictly strings.")
+    normalize_ansible_payload(payload, devices)
 
 # ==========================================
 # --- STREAM INTERCEPTOR & LOGGER ---
@@ -195,9 +178,14 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         "   - Aruba/HPE (aruba/hpe): Use Aruba AOS-CX or ProVision syntax as appropriate.\n"
         "   - MikroTik (mikrotik): Use MikroTik RouterOS syntax (e.g., '/ip address add...').\n"
         "   - Alcatel-Lucent (alcatel): Use Alcatel AOS syntax.\n"
-        "4. The 'config' list is strictly for configuration mode commands (VLANs, interfaces). Do not include 'conf t' or 'exit'. "
-        "5. The 'exec' list is strictly for Privileged EXEC mode commands (e.g., 'write memory', 'copy run start'). "
-        "6. TEMPLATE OVERRIDE: If a base template is provided, preserve its architectural logic but translate the syntax to match the target device's OS. "
+        "4. The 'config' list is strictly for configuration mode commands. Never include 'conf t', 'configure terminal', 'exit', or 'end'. "
+        "5. CISCO IOS HIERARCHY: Global configuration commands may be strings. Commands requiring parent context MUST use an object containing exactly 'parents' and 'lines'; never flatten child commands or use context-changing commands. "
+        "Cisco interface example: {\"cctv_sw1\": {\"config\": [{\"parents\": [\"interface GigabitEthernet0/1\"], \"lines\": [\"description VNMS_PHASE2_TRANSPORT_TEST\"]}], \"exec\": []}}. "
+        "Cisco global VLAN example: {\"cctv_sw1\": {\"config\": [\"vlan 123\"], \"exec\": []}}. "
+        "Cisco VLAN submode example: {\"parents\": [\"vlan 123\"], \"lines\": [\"name USERS\"]}. "
+        "Nested Cisco contexts preserve parent order, for example parents ['router ospf 10', 'address-family ipv4']. "
+        "6. The 'exec' list is strictly for Privileged EXEC mode commands (e.g., 'write memory', 'copy run start'); never put 'write memory' in 'config'. "
+        "7. TEMPLATE OVERRIDE: If a base template is provided, preserve its architectural logic but translate the syntax and hierarchy to match the target device's OS. "
     )
 
     user_prompt = f"Target Devices & Operating Systems:\n{os_mapping_text if os_mapping_text else 'None'}\n\nNetwork Requirement: {request.prompt}"
@@ -271,11 +259,13 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
         raise HTTPException(status_code=400, detail="No target devices selected.")
     try: 
         ai_config_data = json.loads(request.config_text)
-        validate_ansible_payload(ai_config_data) # <-- SANITIZED
     except json.JSONDecodeError: 
         raise HTTPException(status_code=400, detail="Configuration is not valid JSON.")
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
+    if not isinstance(ai_config_data, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Root payload must be a JSON object mapping hostnames to commands.",
+        )
 
     target_hostnames = request.switches + request.routers
     if len(target_hostnames) != len(set(target_hostnames)):
@@ -286,6 +276,10 @@ def simulate_configuration(request: schemas.SimulateConfigRequest, db: Session =
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(target_hostnames)).all()
     if len(devices) != len(normalized_targets):
         raise HTTPException(status_code=404, detail="One or more selected devices were not found in the database.")
+    try:
+        validate_ansible_payload(ai_config_data, devices)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
 
     source_template = request.source_template
     change = models.ConfigurationChange(

@@ -19,7 +19,7 @@ def user(role):
 
 
 def payload(hosts=("sw1",)):
-    config = {host: {"config": [f"description {host}"], "exec": []} for host in hosts}
+    config = {host: {"config": [f"hostname {host}"], "exec": []} for host in hosts}
     return {"prompt": "configure test ports", "config_text": json.dumps(config),
             "switches": list(hosts), "routers": [], "source_template": "approved-template"}
 
@@ -99,6 +99,22 @@ def test_hash_is_deterministic_and_binds_deployment_data():
     assert first == configuration.proposal_hash(config, ["sw1"], "t")
     assert first != configuration.proposal_hash({"sw1": {"config": ["b"], "exec": []}}, ["sw1"], "t")
     assert first != configuration.proposal_hash(config, ["sw1"], "other")
+
+    hierarchy = {"sw1": {"config": [{
+        "parents": ["interface GigabitEthernet0/1"],
+        "lines": ["description ORIGINAL"],
+    }], "exec": []}}
+    hierarchy_hash = configuration.proposal_hash(hierarchy, ["sw1"], "t")
+    changed_parent = {"sw1": {"config": [{
+        "parents": ["interface GigabitEthernet0/2"],
+        "lines": ["description ORIGINAL"],
+    }], "exec": []}}
+    changed_line = {"sw1": {"config": [{
+        "parents": ["interface GigabitEthernet0/1"],
+        "lines": ["description UPDATED"],
+    }], "exec": []}}
+    assert hierarchy_hash != configuration.proposal_hash(changed_parent, ["sw1"], "t")
+    assert hierarchy_hash != configuration.proposal_hash(changed_line, ["sw1"], "t")
 
 
 def test_push_authentication_and_viewer_rbac_precede_side_effects(env, monkeypatch):
@@ -252,3 +268,35 @@ def test_any_backup_failure_blocks_live_ansible_and_preserves_mapping(env, monke
     assert change.status == "pre_backup_failed"
     assert change.pre_backup_files["sw1"].startswith("Pre_Config_")
     assert live_calls == []
+
+
+def test_failed_production_is_persisted_and_cannot_be_replayed(env, monkeypatch):
+    app, client, db = env
+    response = simulate(app, client, role="admin")
+    change_id = response.headers["x-vnms-change-id"]
+    app.dependency_overrides[auth.get_current_user] = lambda: user("admin")
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", lambda d: (
+        {"sw1": "Pre_Config_cisco_switch_sw1_20260807_153500.txt"},
+        [{"hostname": "sw1", "success": True}],
+    ))
+    monkeypatch.setattr(configuration, "run_ansible_playbook", lambda *a, **k: iter([
+        "data: PLAY RECAP\n\n",
+        "data: sw1 : ok=0 changed=0 unreachable=0 failed=1\n\n",
+        "data: PLAYBOOK FINISHED WITH ERRORS.\n\n",
+    ]))
+
+    result = client.post(
+        "/configuration/push",
+        json={"change_id": change_id},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert result.status_code == 200
+    change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
+    assert change.status == "deployment_failed"
+
+    replay = client.post(
+        "/configuration/push",
+        json={"change_id": change_id},
+        headers={"Authorization": "Bearer x"},
+    )
+    assert replay.status_code == 409

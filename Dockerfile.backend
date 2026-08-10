@@ -15,14 +15,17 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Replicate your local Ansible environment exactly
-RUN pipx install --include-deps ansible
-RUN pipx inject ansible paramiko
-RUN pipx inject ansible ansible-pylibssh
+# Reproduce the validated Ansible controller and both SSH transports exactly.
+RUN pipx install --include-deps ansible==14.2.0
+RUN pipx inject ansible paramiko==4.0.0 ansible-pylibssh==1.4.0
 
-# Install Cisco and Netcommon Galaxy Collections
-RUN ansible-galaxy collection install cisco.ios
-RUN ansible-galaxy collection install ansible.netcommon
+# Pin the collections exercised by the Cisco network_cli workflow.
+RUN ansible-galaxy collection install 'ansible.netcommon:==8.6.0' 'cisco.ios:==11.4.2'
+
+# Fail the build if the isolated Ansible interpreter loses validated compatibility.
+RUN /opt/pipx/venvs/ansible/bin/python -c "import importlib.metadata as metadata; import paramiko; assert metadata.version('ansible') == '14.2.0'; assert metadata.version('ansible-core') == '2.21.2'; assert metadata.version('ansible-pylibssh') == '1.4.0'; assert paramiko.__version__ == '4.0.0'; assert 'diffie-hellman-group14-sha1' in paramiko.Transport._preferred_kex; assert 'ssh-rsa' in paramiko.Transport._preferred_keys"
+RUN ansible-galaxy collection list | grep -Eq '^ansible\.netcommon[[:space:]]+8\.6\.0[[:space:]]*$' && \
+    ansible-galaxy collection list | grep -Eq '^cisco\.ios[[:space:]]+11\.4\.2[[:space:]]*$'
 
 # Set the working directory for the API
 WORKDIR /app
