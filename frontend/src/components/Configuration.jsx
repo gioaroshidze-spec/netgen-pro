@@ -22,6 +22,11 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   const [simulationStatus, setSimulationStatus] = useState(null);
   const [overrideReason, setOverrideReason] = useState('');
   const [isAuthorizingOverride, setIsAuthorizingOverride] = useState(false);
+  const [changeStatus, setChangeStatus] = useState(null);
+  const [rollbackReason, setRollbackReason] = useState('');
+  const [isReverifying, setIsReverifying] = useState(false);
+  const [isAuthorizingRollback, setIsAuthorizingRollback] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
   const changeIdRef = useRef(null);
   const terminalEndRef = useRef(null); 
 
@@ -42,6 +47,8 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     setChangeId(null);
     setSimulationStatus(null);
     setOverrideReason('');
+    setChangeStatus(null);
+    setRollbackReason('');
   }, [selectedSwitches, selectedRouters, loadedTemplate]);
 
   const invalidateSimulation = () => {
@@ -49,6 +56,73 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
     setChangeId(null);
     setSimulationStatus(null);
     setOverrideReason('');
+    setChangeStatus(null);
+    setRollbackReason('');
+  };
+
+  const refreshChangeStatus = async (id = changeIdRef.current) => {
+    if (!id) return null;
+    const response = await fetch(`${API_BASE}/configuration/changes/${id}`, {
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not refresh change status.');
+    if (changeIdRef.current === id) setChangeStatus(data);
+    return data;
+  };
+
+  const reverifyChange = async () => {
+    setIsReverifying(true);
+    try {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: '{}'
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Re-verification failed.');
+      await refreshChangeStatus(changeId);
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+    } finally { setIsReverifying(false); }
+  };
+
+  const authorizeRollback = async () => {
+    if (rollbackReason.trim().length < 10) return;
+    setIsAuthorizingRollback(true);
+    try {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/authorize-rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ reason: rollbackReason.trim() })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Rollback authorization failed.');
+      await refreshChangeStatus(changeId);
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+    } finally { setIsAuthorizingRollback(false); }
+  };
+
+  const executeRollback = async () => {
+    const rollbackId = changeStatus?.rollback?.rollback_id;
+    if (!rollbackId) return;
+    const warning = 'HIGH-RISK FULL CONFIGURATION ROLLBACK\n\nThis operation may replace the full device configuration.\nManagement connectivity may be interrupted.\nOut-of-band/console access is recommended.\n\nExecute the authorized rollback?';
+    if (!window.confirm(warning)) return;
+    setIsRollingBack(true);
+    try {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ rollback_id: rollbackId })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Rollback failed.');
+      await refreshChangeStatus(changeId);
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+      await refreshChangeStatus(changeId).catch(() => {});
+    } finally { setIsRollingBack(false); }
   };
 
   const handleGenerateConfig = () => {
@@ -231,7 +305,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           && !/failed=[1-9]\d*|unreachable=[1-9]\d*|fatal:/i.test(completeOutput);
         setSimulationStatus(passed ? 'passed' : 'failed');
       } else {
-        invalidateSimulation();
+        setTerminalLogs(prev => [...prev, 'Refreshing durable post-change verification status...']);
+        await refreshChangeStatus(changeId);
+        setSimulationStatus(null);
       }
     } catch (err) {
       console.error(err);
@@ -376,6 +452,54 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           </div>
         )}
       </div>
+
+      {changeStatus && ['verified', 'verification_failed', 'verification_error', 'deployment_failed'].includes(changeStatus.status) && (
+        <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: `1px solid ${changeStatus.status === 'verified' ? '#4caf50' : '#d32f2f'}`, marginBottom: '20px' }}>
+          {changeStatus.status === 'verified' && <><h3 style={{ color: '#4caf50' }}>Post-Change Verification Passed</h3><p>All target devices are converged.</p></>}
+          {changeStatus.status === 'verification_failed' && <><h3 style={{ color: '#ff6b6b' }}>Post-Change Verification Failed</h3><p>One or more devices still differ from the approved desired state.</p></>}
+          {changeStatus.status === 'verification_error' && <><h3 style={{ color: '#e6a23c' }}>Post-Change Verification Inconclusive</h3><p>VNMS could not reliably determine final state.</p></>}
+          {changeStatus.status === 'deployment_failed' && <><h3 style={{ color: '#ff6b6b' }}>Production Deployment Failed</h3><p><strong>Partial deployment may have occurred.</strong> Rollback will restore the full pre-change configuration.</p></>}
+          {changeStatus.latest_verification?.per_device_results && (
+            <div style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>
+              {Object.entries(changeStatus.latest_verification.per_device_results).map(([host, result]) => (
+                <div key={host}>{host}: {result.status} (ok={result.ok ?? '-'} changed={result.changed ?? '-'} unreachable={result.unreachable ?? '-'} failed={result.failed ?? '-'})</div>
+              ))}
+              <div style={{ color: '#aaa', marginTop: '8px' }}>Privileged EXEC side effects are not state-verified by this configuration convergence check.</div>
+            </div>
+          )}
+          {canPush && ['verified', 'verification_failed', 'verification_error'].includes(changeStatus.status) && (
+            <button onClick={reverifyChange} disabled={isReverifying} style={{ marginTop: '12px', padding: '9px 16px' }}>
+              {isReverifying ? 'Re-verifying...' : 'Re-run Deterministic Verification'}
+            </button>
+          )}
+          {canPush && changeStatus.rollback?.eligible && !changeStatus.rollback.authorized && !changeStatus.rollback.status && (
+            <div style={{ marginTop: '18px', borderTop: '1px solid #555', paddingTop: '15px' }}>
+              <strong>Controlled Rollback Authorization</strong>
+              <p style={{ color: '#e6a23c' }}>Full restore can interrupt management connectivity. VNMS history cannot detect every out-of-band/manual change.</p>
+              <textarea value={rollbackReason} onChange={e => setRollbackReason(e.target.value)} maxLength={1000}
+                placeholder="Required rollback reason (10–1000 characters)"
+                style={{ width: '100%', minHeight: '80px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #e6a23c', padding: '10px' }} />
+              <button onClick={authorizeRollback} disabled={isAuthorizingRollback || rollbackReason.trim().length < 10}
+                style={{ marginTop: '10px', padding: '10px 18px', backgroundColor: '#e6a23c', border: 'none', fontWeight: 'bold' }}>
+                {isAuthorizingRollback ? 'Authorizing...' : 'Authorize Rollback'}
+              </button>
+            </div>
+          )}
+          {canPush && changeStatus.rollback?.authorized && (
+            <div style={{ marginTop: '18px', border: '2px solid #d32f2f', padding: '15px' }}>
+              <strong style={{ color: '#ff6b6b' }}>Rollback Authorized</strong>
+              <p>This operation may replace the full device configuration. Management connectivity may be interrupted. Out-of-band/console access is recommended.</p>
+              <button onClick={executeRollback} disabled={isRollingBack}
+                style={{ padding: '10px 18px', backgroundColor: '#d32f2f', color: 'white', border: 'none', fontWeight: 'bold' }}>
+                {isRollingBack ? 'Executing Rollback...' : 'Execute Rollback'}
+              </button>
+            </div>
+          )}
+          {changeStatus.rollback?.status && changeStatus.rollback.status !== 'authorized' && (
+            <div style={{ marginTop: '15px' }}><strong>Rollback status:</strong> {changeStatus.rollback.status}</div>
+          )}
+        </div>
+      )}
 
       {/* 3. TERMINAL OUTPUT BOX */}
       {(terminalLogs.length > 0 || isSimulating || isPushing) && (

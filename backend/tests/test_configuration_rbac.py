@@ -48,6 +48,7 @@ def env(monkeypatch):
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(configuration, "run_ansible_playbook", successful_stream)
     monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
+    monkeypatch.setattr(configuration, "persist_backup_artifacts", lambda *args, **kwargs: [])
     with TestClient(app) as client:
         yield app, client, db
     db.close()
@@ -144,20 +145,23 @@ def test_admin_deploys_exact_stored_proposal_after_all_backups(env, monkeypatch)
         order.append("backup")
         return ({"sw1": "Pre_Config_cisco_switch_sw1_20260807_153500.txt"},
                 [{"hostname": "sw1", "success": True}])
-    def ansible(config, devices, is_check_mode=True):
+    def ansible(config, devices, is_check_mode=True, execution_mode=None):
         order.append("ansible")
-        ansible_calls.append((config, [d.hostname for d in devices], is_check_mode))
+        ansible_calls.append((config, [d.hostname for d in devices], is_check_mode, execution_mode))
         return successful_stream()
     monkeypatch.setattr(configuration, "create_preconfiguration_backups", backups)
     monkeypatch.setattr(configuration, "run_ansible_playbook", ansible)
     result = client.post("/configuration/push", json={"change_id": change_id},
                          headers={"Authorization": "Bearer x"})
     assert result.status_code == 200
-    assert order == ["backup", "ansible"]
+    assert order == ["backup", "ansible", "ansible"]
     change = db.query(models.ConfigurationChange).filter_by(change_id=change_id).one()
-    assert change.status == "deployed"
+    assert change.status == "verified"
     assert change.pre_backup_files["sw1"].startswith("Pre_Config_cisco_switch_sw1_")
-    assert ansible_calls == [(change.config_payload, ["sw1"], False)]
+    assert ansible_calls == [
+        (change.config_payload, ["sw1"], False, None),
+        (change.config_payload, ["sw1"], True, "verification"),
+    ]
     replay = client.post("/configuration/push", json={"change_id": change_id},
                          headers={"Authorization": "Bearer x"})
     assert replay.status_code == 409
@@ -180,8 +184,42 @@ def test_preconfiguration_backup_uses_existing_filename_format(tmp_path, monkeyp
     files, results = backup_service.create_preconfiguration_backups(
         [device], str(tmp_path), now=SimpleNamespace(strftime=lambda fmt: "20260807_153500"))
     assert results[0]["success"] is True
+    assert results[0]["sha256"] == "b19f8edae2ee6c225b7278b289c2823ab9accfa225c5d67c4bef270b88ea55f0"
+    assert results[0]["size_bytes"] == 9
     assert files == {"SW1": "Pre_Config_cisco_switch_SW1_20260807_153500.txt"}
     assert (tmp_path / files["SW1"]).read_text() == "version 1"
+
+
+def test_real_backup_wrappers_propagate_all_prefixes_at_same_timestamp(tmp_path, monkeypatch):
+    device = SimpleNamespace(hostname="SW1", os_type="cisco", device_type="switch")
+    now = SimpleNamespace(strftime=lambda fmt: "20260810_170000")
+    monkeypatch.setattr(
+        backup_service,
+        "capture_running_configuration",
+        lambda target: {
+            "hostname": target.hostname,
+            "success": True,
+            "config": "hostname SW1",
+        },
+    )
+
+    wrappers = [
+        (backup_service.create_preconfiguration_backups, "Pre_Config"),
+        (backup_service.create_prerollback_backups, "Pre_Rollback"),
+        (backup_service.create_postrollback_backups, "Post_Rollback"),
+    ]
+    filenames = []
+    for wrapper, prefix in wrappers:
+        files, results = wrapper([device], str(tmp_path), now=now)
+        expected = f"{prefix}_cisco_switch_SW1_20260810_170000.txt"
+        assert files == {"SW1": expected}
+        assert results[0]["filename"] == expected
+        assert (tmp_path / expected).read_text() == "hostname SW1"
+        filenames.append(expected)
+
+    assert len(set(filenames)) == 3
+    assert filenames[1] != filenames[0]
+    assert filenames[2] != filenames[0]
 
 
 def test_hash_mismatch_blocks_backup_and_ansible(env, monkeypatch):

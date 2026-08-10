@@ -218,11 +218,15 @@ def write_ansible_inventory(path, devices):
         yaml.safe_dump(inventory, inventory_file, sort_keys=False)
     return inventory
 
-def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
+def run_ansible_playbook(ai_config_data, devices, is_check_mode=True, execution_mode=None):
     """
     Executes Ansible, dynamically builds OS-specific task blocks, and streams output.
     All stdout/stderr is now silently trapped into ansible.log.
     """
+    execution_mode = execution_mode or ("simulation" if is_check_mode else "production")
+    if execution_mode not in {"simulation", "production", "verification"}:
+        raise ValueError(f"Unsupported Ansible execution mode: {execution_mode}")
+    is_check_mode = execution_mode in {"simulation", "verification"}
     normalized_config_data = normalize_ansible_payload(ai_config_data, devices)
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -337,7 +341,11 @@ def run_ansible_playbook(ai_config_data, devices, is_check_mode=True):
             f.write(playbook_content)
 
         # 3. EXECUTE PLAYBOOK
-        mode_text = "DRY-RUN SIMULATION (--check)" if is_check_mode else "LIVE PRODUCTION PUSH"
+        mode_text = {
+            "simulation": "DRY-RUN SIMULATION (--check)",
+            "production": "LIVE PRODUCTION PUSH",
+            "verification": "POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)",
+        }[execution_mode]
         
         ansible_logger.info(f"Starting Ansible Playbook Execution. Mode: {mode_text}")
         

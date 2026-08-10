@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from database import Base
 from datetime import datetime, timezone
@@ -108,6 +108,57 @@ class ConfigurationChange(Base):
     pre_backup_files = Column(JSON, nullable=True)
     deployed_at = Column(DateTime, nullable=True)
     deployed_by = Column(String, nullable=True)
+
+
+class ConfigurationVerification(Base):
+    __tablename__ = "configuration_verifications"
+    id = Column(Integer, primary_key=True, index=True)
+    verification_id = Column(String, unique=True, index=True, nullable=False)
+    change_id = Column(String, index=True, nullable=False)
+    attempt_number = Column(Integer, nullable=False)
+    requested_by = Column(String, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, index=True, nullable=False, default="verifying")
+    per_device_results = Column(JSON, nullable=False, default=dict)
+    ansible_summary = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
+class ConfigurationBackupArtifact(Base):
+    __tablename__ = "configuration_backup_artifacts"
+    id = Column(Integer, primary_key=True, index=True)
+    change_id = Column(String, index=True, nullable=False)
+    rollback_id = Column(String, index=True, nullable=True)
+    hostname = Column(String, index=True, nullable=False)
+    artifact_type = Column(String, index=True, nullable=False)
+    filename = Column(String, nullable=False)
+    sha256 = Column(String, nullable=False)
+    size_bytes = Column(Integer, nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+
+class ConfigurationRollback(Base):
+    __tablename__ = "configuration_rollbacks"
+    id = Column(Integer, primary_key=True, index=True)
+    rollback_id = Column(String, unique=True, index=True, nullable=False)
+    change_id = Column(String, index=True, nullable=False)
+    requested_by = Column(String, nullable=False)
+    reason = Column(Text, nullable=False)
+    authorized_at = Column(DateTime, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, index=True, nullable=False, default="authorized")
+    pre_rollback_files = Column(JSON, nullable=True)
+    per_device_results = Column(JSON, nullable=False, default=dict)
+    verification_results = Column(JSON, nullable=False, default=dict)
+    error = Column(Text, nullable=True)
+
 
 class ConfiguraitonTemplate(Base):
     __tablename__ = "configuration_templates"

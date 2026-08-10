@@ -223,13 +223,17 @@ def test_check_and_live_runs_share_identical_normalization_and_tasks(monkeypatch
 
     list(ansible_engine.run_ansible_playbook(proposal, [target], is_check_mode=True))
     list(ansible_engine.run_ansible_playbook(proposal, [target], is_check_mode=False))
+    list(ansible_engine.run_ansible_playbook(
+        proposal, [target], execution_mode="verification"
+    ))
 
-    assert normalization_calls == [original, original]
-    assert executions[0]["vars"] == executions[1]["vars"]
-    assert executions[0]["playbook"] == executions[1]["playbook"]
+    assert normalization_calls == [original, original, original]
+    assert executions[0]["vars"] == executions[1]["vars"] == executions[2]["vars"]
+    assert executions[0]["playbook"] == executions[1]["playbook"] == executions[2]["playbook"]
     assert yaml.safe_load(executions[0]["playbook"])[0]["tasks"]
     assert "--check" in executions[0]["command"]
     assert "--check" not in executions[1]["command"]
+    assert "--check" in executions[2]["command"]
     assert executions[0]["command"][:2] == executions[1]["command"][:2]
     assert executions[0]["command"][4:-1] == executions[1]["command"][4:]
     assert Path(executions[0]["command"][2]).name == "inventory.yaml"
@@ -238,6 +242,7 @@ def test_check_and_live_runs_share_identical_normalization_and_tasks(monkeypatch
     assert Path(executions[1]["command"][3]).name == "playbook.yaml"
     assert "parents: \"{{ item.parents }}\"" in executions[0]["playbook"]
     assert "cisco_global_lines" in executions[0]["playbook"]
+    assert "not ansible_check_mode" in executions[2]["playbook"]
     assert proposal == original
 
 

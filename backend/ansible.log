@@ -217,3 +217,253 @@
 2026-08-07 14:08:36,628 - [ANSIBLE] - cctv_sw1                   : ok=0    changed=0    unreachable=0    failed=1    skipped=0    rescued=0    ignored=0   
 2026-08-07 14:08:36,629 - [ANSIBLE] - 
 2026-08-07 14:08:36,693 - [ANSIBLE] - Ansible Playbook failed with return code: 2
+2026-08-10 14:21:09,908 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-10 14:21:10,457 - [ANSIBLE] - 
+2026-08-10 14:21:10,457 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:21:10,471 - [ANSIBLE] - 
+2026-08-10 14:21:10,472 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:21:10,498 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:21:10,500 - [ANSIBLE] - 
+2026-08-10 14:21:10,500 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:21:14,181 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 14:21:14,181 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:21:14,182 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:14,182 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:14,183 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:21:14,183 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:21:14,183 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:21:14,188 - [ANSIBLE] - 
+2026-08-10 14:21:14,189 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:21:14,201 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:21:14,202 - [ANSIBLE] - 
+2026-08-10 14:21:14,202 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:21:14,203 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 14:21:14,203 - [ANSIBLE] - 
+2026-08-10 14:21:14,267 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:21:23,131 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: LIVE PRODUCTION PUSH
+2026-08-10 14:21:23,483 - [ANSIBLE] - 
+2026-08-10 14:21:23,484 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:21:23,495 - [ANSIBLE] - 
+2026-08-10 14:21:23,495 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:21:23,518 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:21:23,520 - [ANSIBLE] - 
+2026-08-10 14:21:23,520 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:21:27,917 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 14:21:27,918 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:21:27,918 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:27,919 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:27,919 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:21:27,919 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:21:27,919 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:21:27,925 - [ANSIBLE] - 
+2026-08-10 14:21:27,925 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:21:28,454 - [ANSIBLE] - ok: [cctv_sw1]
+2026-08-10 14:21:28,457 - [ANSIBLE] - 
+2026-08-10 14:21:28,457 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:21:28,458 - [ANSIBLE] - cctv_sw1                   : ok=2    changed=1    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+2026-08-10 14:21:28,458 - [ANSIBLE] - 
+2026-08-10 14:21:28,520 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:21:28,573 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)
+2026-08-10 14:21:28,942 - [ANSIBLE] - 
+2026-08-10 14:21:28,942 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:21:28,951 - [ANSIBLE] - 
+2026-08-10 14:21:28,951 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:21:28,974 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:21:28,976 - [ANSIBLE] - 
+2026-08-10 14:21:28,976 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:21:32,379 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:21:32,379 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:32,379 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:21:32,379 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:21:32,379 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:21:32,379 - [ANSIBLE] - ok: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:21:32,385 - [ANSIBLE] - 
+2026-08-10 14:21:32,385 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:21:32,396 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:21:32,397 - [ANSIBLE] - 
+2026-08-10 14:21:32,397 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:21:32,397 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 14:21:32,397 - [ANSIBLE] - 
+2026-08-10 14:21:32,453 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:31:57,639 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-10 14:31:58,006 - [ANSIBLE] - 
+2026-08-10 14:31:58,006 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:31:58,018 - [ANSIBLE] - 
+2026-08-10 14:31:58,019 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:31:58,041 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:31:58,043 - [ANSIBLE] - 
+2026-08-10 14:31:58,043 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:32:01,502 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 14:32:01,502 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:32:01,503 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:01,503 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:01,503 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:32:01,504 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:32:01,504 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:32:01,508 - [ANSIBLE] - 
+2026-08-10 14:32:01,508 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:32:01,521 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:01,522 - [ANSIBLE] - 
+2026-08-10 14:32:01,522 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:32:01,522 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 14:32:01,523 - [ANSIBLE] - 
+2026-08-10 14:32:01,585 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:32:07,428 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: LIVE PRODUCTION PUSH
+2026-08-10 14:32:07,785 - [ANSIBLE] - 
+2026-08-10 14:32:07,786 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:32:07,796 - [ANSIBLE] - 
+2026-08-10 14:32:07,797 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:32:07,819 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:07,821 - [ANSIBLE] - 
+2026-08-10 14:32:07,821 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:32:12,290 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 14:32:12,291 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:32:12,291 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:12,292 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:12,292 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:32:12,292 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:32:12,293 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:32:12,297 - [ANSIBLE] - 
+2026-08-10 14:32:12,297 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:32:12,823 - [ANSIBLE] - ok: [cctv_sw1]
+2026-08-10 14:32:12,826 - [ANSIBLE] - 
+2026-08-10 14:32:12,827 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:32:12,827 - [ANSIBLE] - cctv_sw1                   : ok=2    changed=1    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+2026-08-10 14:32:12,827 - [ANSIBLE] - 
+2026-08-10 14:32:12,889 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:32:12,931 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)
+2026-08-10 14:32:13,301 - [ANSIBLE] - 
+2026-08-10 14:32:13,301 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:32:13,311 - [ANSIBLE] - 
+2026-08-10 14:32:13,311 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:32:13,333 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:13,335 - [ANSIBLE] - 
+2026-08-10 14:32:13,335 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:32:16,720 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:32:16,720 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:16,720 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:16,720 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:32:16,721 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:32:16,721 - [ANSIBLE] - ok: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:32:16,725 - [ANSIBLE] - 
+2026-08-10 14:32:16,726 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:32:16,737 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:16,737 - [ANSIBLE] - 
+2026-08-10 14:32:16,737 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:32:16,737 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 14:32:16,738 - [ANSIBLE] - 
+2026-08-10 14:32:16,793 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 14:32:50,589 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)
+2026-08-10 14:32:50,940 - [ANSIBLE] - 
+2026-08-10 14:32:50,940 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 14:32:50,949 - [ANSIBLE] - 
+2026-08-10 14:32:50,949 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 14:32:50,972 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:50,974 - [ANSIBLE] - 
+2026-08-10 14:32:50,974 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 14:32:54,392 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 14:32:54,392 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 14:32:54,392 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 14:32:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 14:32:54,393 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 14:32:54,393 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 14:32:54,398 - [ANSIBLE] - 
+2026-08-10 14:32:54,398 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 14:32:54,409 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 14:32:54,410 - [ANSIBLE] - 
+2026-08-10 14:32:54,410 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 14:32:54,410 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 14:32:54,410 - [ANSIBLE] - 
+2026-08-10 14:32:54,464 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 15:25:33,771 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: DRY-RUN SIMULATION (--check)
+2026-08-10 15:25:34,273 - [ANSIBLE] - 
+2026-08-10 15:25:34,273 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 15:25:34,289 - [ANSIBLE] - 
+2026-08-10 15:25:34,289 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 15:25:34,315 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:25:34,317 - [ANSIBLE] - 
+2026-08-10 15:25:34,317 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 15:25:37,772 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 15:25:37,773 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 15:25:37,773 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:37,774 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:37,774 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 15:25:37,774 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 15:25:37,775 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 15:25:37,780 - [ANSIBLE] - 
+2026-08-10 15:25:37,781 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 15:25:37,793 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:25:37,794 - [ANSIBLE] - 
+2026-08-10 15:25:37,794 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 15:25:37,794 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 15:25:37,794 - [ANSIBLE] - 
+2026-08-10 15:25:37,856 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 15:25:42,869 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: LIVE PRODUCTION PUSH
+2026-08-10 15:25:43,228 - [ANSIBLE] - 
+2026-08-10 15:25:43,228 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 15:25:43,239 - [ANSIBLE] - 
+2026-08-10 15:25:43,239 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 15:25:43,262 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:25:43,264 - [ANSIBLE] - 
+2026-08-10 15:25:43,264 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 15:25:47,690 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 15:25:47,691 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 15:25:47,691 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:47,692 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:47,692 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 15:25:47,692 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 15:25:47,692 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 15:25:47,697 - [ANSIBLE] - 
+2026-08-10 15:25:47,697 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 15:25:48,212 - [ANSIBLE] - ok: [cctv_sw1]
+2026-08-10 15:25:48,215 - [ANSIBLE] - 
+2026-08-10 15:25:48,216 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 15:25:48,216 - [ANSIBLE] - cctv_sw1                   : ok=2    changed=1    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+2026-08-10 15:25:48,216 - [ANSIBLE] - 
+2026-08-10 15:25:48,282 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 15:25:48,333 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)
+2026-08-10 15:25:48,702 - [ANSIBLE] - 
+2026-08-10 15:25:48,702 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 15:25:48,712 - [ANSIBLE] - 
+2026-08-10 15:25:48,712 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 15:25:48,735 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:25:48,737 - [ANSIBLE] - 
+2026-08-10 15:25:48,737 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 15:25:52,392 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 15:25:52,392 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:52,392 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:25:52,392 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 15:25:52,392 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 15:25:52,392 - [ANSIBLE] - ok: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 15:25:52,397 - [ANSIBLE] - 
+2026-08-10 15:25:52,397 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 15:25:52,408 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:25:52,409 - [ANSIBLE] - 
+2026-08-10 15:25:52,409 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 15:25:52,409 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=0    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 15:25:52,409 - [ANSIBLE] - 
+2026-08-10 15:25:52,464 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.
+2026-08-10 15:26:16,333 - [ANSIBLE] - Starting Ansible Playbook Execution. Mode: POST-CHANGE VERIFICATION (--check; EXEC EXCLUDED)
+2026-08-10 15:26:16,684 - [ANSIBLE] - 
+2026-08-10 15:26:16,684 - [ANSIBLE] - PLAY [VNMS Multi-Vendor Configuration Deployment] ******************************
+2026-08-10 15:26:16,693 - [ANSIBLE] - 
+2026-08-10 15:26:16,693 - [ANSIBLE] - TASK [(CISCO) Apply Global Configuration] **************************************
+2026-08-10 15:26:16,715 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:26:16,717 - [ANSIBLE] - 
+2026-08-10 15:26:16,717 - [ANSIBLE] - TASK [(CISCO) Apply Hierarchical Configuration] ********************************
+2026-08-10 15:26:20,095 - [ANSIBLE] - [WARNING]: To ensure idempotency and correct diff the input configuration lines should be similar to how they appear if present in the running configuration on device
+2026-08-10 15:26:20,095 - [ANSIBLE] - [WARNING]: Deprecation warnings can be disabled by setting `deprecation_warnings=False` in ansible.cfg.
+2026-08-10 15:26:20,095 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_bytes' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:26:20,095 - [ANSIBLE] - [DEPRECATION WARNING]: Importing 'to_text' from 'ansible.module_utils._text' is deprecated. This feature will be removed from ansible-core version 2.24. Use ansible.module_utils.common.text.converters instead.
+2026-08-10 15:26:20,095 - [ANSIBLE] - [DEPRECATION WARNING]: The `ansible.module_utils.common._collections_compat` module is deprecated. This feature will be removed from ansible-core version 2.24. Use `collections.abc` from the Python standard library instead.
+2026-08-10 15:26:20,096 - [ANSIBLE] - [DEPRECATION WARNING]: Passing `warnings` to `exit_json` or `fail_json` is deprecated. This feature will be removed from ansible-core version 2.23. Use `AnsibleModule.warn` instead.
+2026-08-10 15:26:20,096 - [ANSIBLE] - changed: [cctv_sw1] => (item={'parents': ['interface GigabitEthernet1/0/1'], 'lines': ['description VNMS_PHASE3_VERIFY_TEST']})
+2026-08-10 15:26:20,100 - [ANSIBLE] - 
+2026-08-10 15:26:20,100 - [ANSIBLE] - TASK [(CISCO) Run Exec Commands] ***********************************************
+2026-08-10 15:26:20,111 - [ANSIBLE] - skipping: [cctv_sw1]
+2026-08-10 15:26:20,112 - [ANSIBLE] - 
+2026-08-10 15:26:20,112 - [ANSIBLE] - PLAY RECAP *********************************************************************
+2026-08-10 15:26:20,112 - [ANSIBLE] - cctv_sw1                   : ok=1    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0   
+2026-08-10 15:26:20,112 - [ANSIBLE] - 
+2026-08-10 15:26:20,167 - [ANSIBLE] - Ansible Playbook completed successfully with no errors.

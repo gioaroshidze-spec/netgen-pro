@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models
 import os, difflib
-import re
 from typing import Optional
 from routers.auth import get_current_user
+from config_compare import normalize_config_for_comparison
 
 router = APIRouter(tags=["Archive & Compare"])
 ARCHIVE_DIR = "archive"
@@ -100,10 +100,8 @@ async def compare_configs(
         raise HTTPException(status_code=400, detail="Missing File 2")
 
     # --- SMART SCRUBBER ---
-    config1 = re.sub(r'^! Last configuration change.*$\n?', '', config1, flags=re.MULTILINE)
-    config2 = re.sub(r'^! Last configuration change.*$\n?', '', config2, flags=re.MULTILINE)
-    config1 = re.sub(r'^! NVRAM config last updated.*$\n?', '', config1, flags=re.MULTILINE)
-    config2 = re.sub(r'^! NVRAM config last updated.*$\n?', '', config2, flags=re.MULTILINE)
+    config1 = normalize_config_for_comparison(config1)
+    config2 = normalize_config_for_comparison(config2)
 
     if config1 == config2:
         return {"match": True, "html": "<div style='padding: 20px; color: #4caf50; font-weight: bold; text-align: center;'>✅ Configurations are a 100% perfect match. Zero drift detected.</div>"}

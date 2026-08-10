@@ -141,6 +141,20 @@ class SimulationOverrideRequest(BaseModel):
     override_reason: str
 
 
+class VerifyChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class RollbackAuthorizationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str
+
+
+class RollbackExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rollback_id: str
+
+
 # --- EVENT LOG SCHEMAS ---
 class EventLogCreate(BaseModel):
     event_type: str

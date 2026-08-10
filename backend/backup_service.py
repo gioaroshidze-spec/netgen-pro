@@ -1,4 +1,5 @@
 import os
+import hashlib
 from datetime import datetime
 from netmiko import ConnectHandler, NetmikoAuthenticationException, NetmikoTimeoutException
 from connection_utils import get_netmiko_params
@@ -27,7 +28,11 @@ def capture_running_configuration(device) -> dict:
     except Exception as exc:
         return {"hostname": device.hostname, "success": False, "error": str(exc)}
 
-def create_preconfiguration_backups(devices, archive_dir="archive", now=None):
+ARCHIVE_DIR = os.getenv("VNMS_ARCHIVE_DIR", "archive")
+
+
+def _create_configuration_backups(devices, prefix, archive_dir=None, now=None):
+    archive_dir = archive_dir or ARCHIVE_DIR
     os.makedirs(archive_dir, exist_ok=True)
     results, files = [], {}
     for device in devices:
@@ -35,12 +40,30 @@ def create_preconfiguration_backups(devices, archive_dir="archive", now=None):
         results.append(result)
         if result["success"]:
             timestamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
-            filename = build_backup_filename("Pre_Config", device.os_type, device.device_type, device.hostname, timestamp)
+            filename = build_backup_filename(prefix, device.os_type, device.device_type, device.hostname, timestamp)
             try:
                 with open(os.path.join(archive_dir, filename), "w", encoding="utf-8") as archive:
                     archive.write(result["config"])
+                artifact_path = os.path.join(archive_dir, filename)
+                with open(artifact_path, "rb") as archive:
+                    artifact_bytes = archive.read()
+                result["filename"] = filename
+                result["sha256"] = hashlib.sha256(artifact_bytes).hexdigest()
+                result["size_bytes"] = len(artifact_bytes)
                 files[device.hostname] = filename
             except Exception as exc:
                 result["success"] = False
                 result["error"] = f"Archive write failed: {exc}"
     return files, results
+
+
+def create_preconfiguration_backups(devices, archive_dir=None, now=None):
+    return _create_configuration_backups(devices, "Pre_Config", archive_dir, now)
+
+
+def create_prerollback_backups(devices, archive_dir=None, now=None):
+    return _create_configuration_backups(devices, "Pre_Rollback", archive_dir, now)
+
+
+def create_postrollback_backups(devices, archive_dir=None, now=None):
+    return _create_configuration_backups(devices, "Post_Rollback", archive_dir, now)

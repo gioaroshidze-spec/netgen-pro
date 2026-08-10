@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import hashlib
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +17,15 @@ from ansible_engine import normalize_ansible_payload, run_ansible_playbook
 from routers.auth import decrypt_secret
 from logger import log_event
 from backup_service import create_preconfiguration_backups
+from change_control import proposal_hash
+from verification_service import run_verification, VerificationConflict
+from rollback_service import (
+    ELIGIBLE_CHANGE_STATES,
+    RollbackRejected,
+    authorize_rollback,
+    execute_rollback,
+    persist_backup_artifacts,
+)
 
 router = APIRouter(tags=["Configuration Engine"])
 
@@ -34,14 +42,6 @@ def validate_ansible_payload(payload: dict, devices):
 # ==========================================
 # --- STREAM INTERCEPTOR & LOGGER ---
 # ==========================================
-def proposal_hash(config_payload, target_devices, source_template=None):
-    canonical = {
-        "config_payload": config_payload,
-        "target_devices": sorted(target_devices),
-        "source_template": source_template,
-    }
-    return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
-
 def simulation_succeeded(output):
     clean = output.replace("data: ", "").replace("\n\n", "\n")
     has_recap = "PLAY RECAP" in clean
@@ -146,8 +146,21 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
             change.status = "simulation_passed" if not has_failures else "simulation_failed"
         else:
             change.deployed_at = now if not has_failures else None
-            change.status = "deployed" if not has_failures else "deployment_failed"
+            change.status = "verifying" if not has_failures else "deployment_failed"
         db.commit()
+        if mode == "Production Push" and not has_failures:
+            yield "data: --------------------------------------------------\n\n"
+            yield "data: Verifying post-change state...\n\n"
+            verification = run_verification(
+                db, change, devices, "System", run_ansible_playbook,
+                audit_logger=log_event,
+            )
+            if verification.status == "verified":
+                yield "data: POST-CHANGE VERIFICATION PASSED: All target devices are converged.\n\n"
+            elif verification.status == "verification_failed":
+                yield "data: POST-CHANGE VERIFICATION FAILED: One or more devices differ from the approved desired state.\n\n"
+            else:
+                yield "data: POST-CHANGE VERIFICATION INCONCLUSIVE: VNMS could not reliably determine final state.\n\n"
 
 
 # ==========================================
@@ -323,7 +336,15 @@ def push_configuration(request: schemas.PushConfigRequest, db: Session = Depends
     files, backup_results = create_preconfiguration_backups(devices)
     change.pre_backup_files = files
     change.pre_backup_completed_at = datetime.now(timezone.utc)
-    failures = [r["hostname"] for r in backup_results if not r["success"]]
+    expected_targets = set(change.target_devices)
+    successful_targets = {
+        result["hostname"] for result in backup_results if result.get("success")
+    }
+    failures = sorted(
+        {result["hostname"] for result in backup_results if not result.get("success")}
+        | (expected_targets - successful_targets)
+        | (expected_targets - set(files))
+    )
     for result in backup_results:
         log_event(db=db, event_type="Configuration", severity="SUCCESS" if result["success"] else "ERROR",
                   author=current_user.username, target_devices=[result["hostname"]],
@@ -335,6 +356,28 @@ def push_configuration(request: schemas.PushConfigRequest, db: Session = Depends
         change.status = "pre_backup_failed"
         db.commit()
         raise HTTPException(status_code=502, detail={"message": "Pre-configuration backup failed; deployment blocked.", "failed_targets": failures})
+    try:
+        artifacts = persist_backup_artifacts(db, change.change_id, backup_results, "pre_config")
+    except Exception as exc:
+        db.rollback()
+        change = db.query(models.ConfigurationChange).filter(
+            models.ConfigurationChange.change_id == request.change_id
+        ).one()
+        change.pre_backup_success = False
+        change.status = "pre_backup_failed"
+        db.commit()
+        log_event(db=db, event_type="Configuration", severity="ERROR", author=current_user.username,
+                  target_devices=change.target_devices,
+                  details={"action": "Pre-Configuration Artifact Persistence Failed",
+                           "change_id": change.change_id, "proposal_hash": change.proposal_hash,
+                           "error": str(exc)})
+        raise HTTPException(status_code=502, detail="Pre-configuration artifact integrity metadata could not be persisted; deployment blocked.")
+    log_event(db=db, event_type="Configuration", severity="SUCCESS", author=current_user.username,
+              target_devices=change.target_devices,
+              details={"action": "Pre-Configuration Artifacts Integrity-Bound",
+                       "change_id": change.change_id, "proposal_hash": change.proposal_hash,
+                       "artifacts": {a.hostname: {"filename": a.filename, "sha256": a.sha256,
+                                                   "size_bytes": a.size_bytes} for a in artifacts}})
     change.pre_backup_success = True
     change.status = "deploying"
     change.deployed_by = current_user.username
@@ -378,3 +421,141 @@ def authorize_simulation_override(
                        "simulation_state": "failed"}, target_devices=change.target_devices)
     return {"change_id": change.change_id, "status": "admin_override_authorized",
             "message": "Admin Override Authorized — Production Push Available"}
+
+
+def _get_change_or_404(db, change_id):
+    change = db.query(models.ConfigurationChange).filter(
+        models.ConfigurationChange.change_id == change_id
+    ).first()
+    if not change:
+        raise HTTPException(status_code=404, detail="Configuration change not found.")
+    return change
+
+
+@router.get("/configuration/changes/{change_id}")
+def get_change_status(
+    change_id: str, db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    change = _get_change_or_404(db, change_id)
+    latest_verification = db.query(models.ConfigurationVerification).filter(
+        models.ConfigurationVerification.change_id == change_id
+    ).order_by(models.ConfigurationVerification.attempt_number.desc()).first()
+    latest_rollback = db.query(models.ConfigurationRollback).filter(
+        models.ConfigurationRollback.change_id == change_id
+    ).order_by(models.ConfigurationRollback.authorized_at.desc()).first()
+    integrity_bound_hosts = {
+        row[0] for row in db.query(models.ConfigurationBackupArtifact.hostname).filter(
+            models.ConfigurationBackupArtifact.change_id == change_id,
+            models.ConfigurationBackupArtifact.artifact_type == "pre_config",
+        ).all()
+    }
+    return {
+        "change_id": change.change_id, "status": change.status,
+        "targets": change.target_devices,
+        "simulation_success": change.simulation_success,
+        "pre_backup_success": change.pre_backup_success,
+        "latest_verification": None if not latest_verification else {
+            "verification_id": latest_verification.verification_id,
+            "attempt_number": latest_verification.attempt_number,
+            "status": latest_verification.status,
+            "per_device_results": latest_verification.per_device_results,
+            "error": latest_verification.error,
+            "exec_actions_state_verified": False,
+        },
+        "rollback": {
+            "eligible": (
+                change.status in ELIGIBLE_CHANGE_STATES
+                and integrity_bound_hosts == set(change.target_devices)
+                and latest_rollback is None
+            ),
+            "authorized": bool(latest_rollback and latest_rollback.status == "authorized"),
+            "rollback_id": latest_rollback.rollback_id if latest_rollback and latest_rollback.status == "authorized" else None,
+            "status": latest_rollback.status if latest_rollback else None,
+            "per_device_results": latest_rollback.per_device_results if latest_rollback else {},
+            "verification_results": latest_rollback.verification_results if latest_rollback else {},
+            "error": latest_rollback.error if latest_rollback else None,
+        },
+    }
+
+
+@router.post("/configuration/changes/{change_id}/verify")
+def verify_change(
+    change_id: str, request: schemas.VerifyChangeRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    if change.status not in {"verified", "verification_failed", "verification_error"}:
+        raise HTTPException(status_code=409, detail=f"Change cannot be verified from state '{change.status}'.")
+    devices = db.query(models.NetworkDevice).filter(
+        models.NetworkDevice.hostname.in_(change.target_devices)
+    ).all()
+    try:
+        record = run_verification(
+            db, change, devices, current_user.username, run_ansible_playbook,
+            audit_logger=log_event,
+        )
+    except VerificationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "change_id": change.change_id,
+        "verification_id": record.verification_id,
+        "attempt_number": record.attempt_number,
+        "status": record.status,
+        "per_device_results": record.per_device_results,
+        "error": record.error,
+        "exec_actions_state_verified": False,
+    }
+
+
+@router.post("/configuration/changes/{change_id}/authorize-rollback")
+def authorize_change_rollback(
+    change_id: str, request: schemas.RollbackAuthorizationRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    reason = request.reason.strip()
+    if not 10 <= len(reason) <= 1000:
+        raise HTTPException(status_code=422, detail="Rollback reason must be between 10 and 1000 characters.")
+    try:
+        rollback = authorize_rollback(
+            db, change, current_user.username, reason, audit_logger=log_event
+        )
+    except RollbackRejected as exc:
+        log_event(db=db, event_type="Configuration", severity="ERROR", author=current_user.username,
+                  target_devices=change.target_devices,
+                  details={"action": "Rollback Authorization Rejected", "change_id": change.change_id,
+                           "proposal_hash": change.proposal_hash, "reason": str(exc)})
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"change_id": change.change_id, "rollback_id": rollback.rollback_id,
+            "status": rollback.status, "message": "Rollback Authorized"}
+
+
+@router.post("/configuration/changes/{change_id}/rollback")
+def rollback_change(
+    change_id: str, request: schemas.RollbackExecutionRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    rollback = db.query(models.ConfigurationRollback).filter(
+        models.ConfigurationRollback.rollback_id == request.rollback_id
+    ).first()
+    if not rollback:
+        raise HTTPException(status_code=404, detail="Rollback authorization not found.")
+    try:
+        rollback = execute_rollback(
+            db, change, rollback, current_user.username, audit_logger=log_event
+        )
+    except RollbackRejected as exc:
+        log_event(db=db, event_type="Configuration", severity="ERROR", author=current_user.username,
+                  target_devices=change.target_devices,
+                  details={"action": "Rollback Execution Rejected", "change_id": change.change_id,
+                           "proposal_hash": change.proposal_hash,
+                           "rollback_id": request.rollback_id, "reason": str(exc)})
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"change_id": change.change_id, "rollback_id": rollback.rollback_id,
+            "status": rollback.status, "per_device_results": rollback.per_device_results,
+            "verification_results": rollback.verification_results, "error": rollback.error}
