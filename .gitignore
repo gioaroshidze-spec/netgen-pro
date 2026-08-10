@@ -24,4 +24,8 @@ netgen.db
 # Ignore server backups and archives
 archive/
 
+backend/*.log
+backend/ansible.log
+backend/backend_app.log
+
 .env
