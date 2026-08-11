@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y \
 
 # Reproduce the validated Ansible controller and both SSH transports exactly.
 RUN pipx install --include-deps ansible==14.2.0
-RUN pipx inject ansible paramiko==4.0.0 ansible-pylibssh==1.4.0 scp==0.16.1
+RUN pipx inject --force ansible ansible-core==2.21.2 paramiko==4.0.0 ansible-pylibssh==1.4.0 scp==0.16.1
 
 # Pin the collections exercised by the Cisco network_cli workflow.
 RUN ansible-galaxy collection install 'ansible.netcommon:==8.6.0' 'cisco.ios:==11.4.2'

@@ -28,6 +28,10 @@ ACTIVE_ROLLBACK_STATES = {
     "authorized", "capturing_pre_rollback", "rolling_back", "verifying_rollback"
 }
 CISCO_ROLLBACK_TEMP_FILE = "flash:vnms_rollback.cfg"
+_CISCO_ROLLBACK_DIR_ENTRY_PATTERN = (
+    r"(?m)^\s*\d+\s+-[rwx-]+\s+([0-9]+)\s+[^\r\n]*\s+"
+    r"vnms_rollback\.cfg\s*$"
+)
 
 _RESTORE_SUMMARY_LIMIT = 4000
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -392,6 +396,33 @@ def run_cisco_restore(devices, validated_artifacts, rollback_id, subprocess_runn
                             "'No such file' not in (vnms_transferred_temp.stdout | default([]) | join('\\n'))",
                         ],
                         "fail_msg": "The exact transferred VNMS rollback file is not present.",
+                    },
+                },
+                {
+                    "name": "Extract the exact transferred VNMS rollback file size",
+                    "ansible.builtin.set_fact": {
+                        "vnms_transferred_size_matches": "{{ (vnms_transferred_temp.stdout | default([]) | join('\\n')) | regex_findall('"
+                        + _CISCO_ROLLBACK_DIR_ENTRY_PATTERN
+                        + "') }}"
+                    },
+                    "changed_when": False,
+                },
+                {
+                    "name": "Require a uniquely parseable transferred file size",
+                    "ansible.builtin.assert": {
+                        "that": [
+                            "vnms_transferred_size_matches | length == 1",
+                        ],
+                        "fail_msg": "The exact transferred VNMS rollback file size could not be determined safely.",
+                    },
+                },
+                {
+                    "name": "Require the transferred file size to match the validated artifact",
+                    "ansible.builtin.assert": {
+                        "that": [
+                            "(vnms_transferred_size_matches | first | int) == (restore_file_size | int)",
+                        ],
+                        "fail_msg": "The transferred VNMS rollback file size does not match the validated artifact.",
                     },
                 },
             ],

@@ -9,10 +9,10 @@ def test_dockerfile_pins_validated_ansible_runtime_and_collections():
 
     assert "RUN pipx install --include-deps ansible==14.2.0" in dockerfile
     assert (
-        "RUN pipx inject ansible paramiko==4.0.0 ansible-pylibssh==1.4.0 scp==0.16.1"
+        "RUN pipx inject --force ansible ansible-core==2.21.2 paramiko==4.0.0 "
+        "ansible-pylibssh==1.4.0 scp==0.16.1"
         in dockerfile
     )
-    assert "pipx inject ansible ansible-core" not in dockerfile
     assert "metadata.version('ansible-core') == '2.21.2'" in dockerfile
     assert "paramiko.__version__ == '4.0.0'" in dockerfile
     assert "import scp" in dockerfile

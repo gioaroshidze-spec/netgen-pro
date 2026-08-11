@@ -1,6 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ==========================================
 # --- NEW: ORGANIZATION SCHEMAS ---
@@ -166,6 +166,17 @@ class EventLogCreate(BaseModel):
 class EventLogResponse(EventLogCreate):
     id: int
     timestamp: datetime
+
+    @field_validator("timestamp")
+    @classmethod
+    def normalize_timestamp_to_utc(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    @field_serializer("timestamp", when_used="json")
+    def serialize_timestamp_as_utc(self, value: datetime) -> str:
+        return value.isoformat().replace("+00:00", "Z")
 
     class Config: # Fixed 'config' capitalization to 'Config' for Pydantic standard
         from_attributes = True

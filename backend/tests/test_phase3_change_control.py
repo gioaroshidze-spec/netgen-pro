@@ -1,4 +1,5 @@
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -376,6 +377,27 @@ def test_cisco_adapter_uses_only_bounded_file_preflight_and_separate_replace(tmp
     assert next(task for task in prepare_tasks if task["name"] == "Remove only the existing VNMS-owned rollback file")["when"] == "vnms_temp_exists | bool"
     assert any("bytes free" in str(task) for task in prepare_tasks)
     assert any("determinably insufficient" in task["name"] for task in prepare_tasks)
+    size_extract = next(
+        task for task in prepare_tasks
+        if task["name"] == "Extract the exact transferred VNMS rollback file size"
+    )
+    assert rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN in (
+        size_extract["ansible.builtin.set_fact"]["vnms_transferred_size_matches"]
+    )
+    unique_size = next(
+        task for task in prepare_tasks
+        if task["name"] == "Require a uniquely parseable transferred file size"
+    )
+    assert unique_size["ansible.builtin.assert"]["that"] == [
+        "vnms_transferred_size_matches | length == 1"
+    ]
+    matching_size = next(
+        task for task in prepare_tasks
+        if task["name"] == "Require the transferred file size to match the validated artifact"
+    )
+    assert matching_size["ansible.builtin.assert"]["that"] == [
+        "(vnms_transferred_size_matches | first | int) == (restore_file_size | int)"
+    ]
     forbidden = ("startup-config", "config.text", "vlan.dat", "/recursive", "*.cfg")
     assert all(value not in prepare_text + replace_text for value in forbidden)
 
@@ -407,6 +429,92 @@ def test_missing_transferred_file_prevents_configure_replace(tmp_path, monkeypat
     assert "exact transferred VNMS rollback file" in summary
     assert len(playbooks) == 1
     assert "configure replace" not in yaml.safe_dump(playbooks[0])
+
+
+@pytest.mark.parametrize(
+    ("size_case", "size_delta", "replace_expected"),
+    [
+        pytest.param("matching", 0, True, id="matching-remote-size"),
+        pytest.param("smaller", -1, False, id="smaller-truncated-remote-size"),
+        pytest.param("larger", 1, False, id="larger-remote-size"),
+        pytest.param("unparseable", None, False, id="unparseable-remote-size"),
+    ],
+)
+def test_transferred_file_size_gate_controls_configure_replace(
+    tmp_path, monkeypatch, size_case, size_delta, replace_expected,
+):
+    source = tmp_path / "Pre_Config_cisco_switch_sw1_20260810_120000.txt"
+    source.write_text("hostname sw1\n")
+    artifact = SimpleNamespace(filename=source.name)
+    playbooks = []
+
+    size_text = (
+        "unknown"
+        if size_delta is None
+        else str(source.stat().st_size + size_delta)
+    )
+    remote_listing = (
+        "Directory of flash:/vnms_rollback.cfg\n"
+        f"  17  -rw-  {size_text}  Aug 11 2026 12:00:00 +00:00  vnms_rollback.cfg\n"
+        "15998976 bytes total (12000000 bytes free)\n"
+    )
+
+    def subprocess_runner(command, **kwargs):
+        inventory = yaml.safe_load(open(command[2], encoding="utf-8"))
+        playbook = yaml.safe_load(open(command[3], encoding="utf-8"))
+        playbooks.append(playbook)
+        if len(playbooks) == 1:
+            prepare_tasks = playbook[0]["tasks"]
+            size_fact = next(
+                task for task in prepare_tasks
+                if task["name"] == "Extract the exact transferred VNMS rollback file size"
+            )
+            assert rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN in (
+                size_fact["ansible.builtin.set_fact"]["vnms_transferred_size_matches"]
+            )
+            remote_matches = re.findall(
+                rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN,
+                remote_listing,
+            )
+            local_size = inventory["all"]["hosts"]["sw1"]["restore_file_size"]
+            size_is_valid = (
+                len(remote_matches) == 1
+                and int(remote_matches[0]) == local_size
+            )
+            return SimpleNamespace(
+                returncode=0 if size_is_valid else 2,
+                stdout=(
+                    recap()
+                    if size_is_valid
+                    else recap(failed=1, complete=False)
+                    + f"Transferred file size validation failed: {size_case}.\n"
+                ),
+            )
+        return SimpleNamespace(returncode=0, stdout=recap())
+
+    monkeypatch.setattr(
+        rollback_service, "get_ansible_inventory_vars",
+        lambda device: {"ansible_host": "192.0.2.10"},
+    )
+    success, results, _ = rollback_service.run_cisco_restore(
+        [SimpleNamespace(hostname="sw1")], {"sw1": (artifact, source)},
+        "ignored-rollback-id", subprocess_runner,
+    )
+
+    assert success is replace_expected
+    assert results["sw1"]["status"] == (
+        "restored" if replace_expected else "prepare_failed"
+    )
+    assert len(playbooks) == (2 if replace_expected else 1)
+    if replace_expected:
+        assert "configure replace flash:vnms_rollback.cfg force" in yaml.safe_dump(
+            playbooks[1]
+        )
+    else:
+        assert all(
+            "configure replace" not in yaml.safe_dump(playbook)
+            for playbook in playbooks
+        )
 
 
 def test_cleanup_adapter_deletes_only_exact_vnms_owned_file(tmp_path, monkeypatch):
