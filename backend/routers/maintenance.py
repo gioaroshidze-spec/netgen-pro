@@ -7,16 +7,16 @@ from database import get_db
 import models, schemas
 import os, io, zipfile, json
 from dotenv import load_dotenv
-import tempfile
-import asyncio
 from typing import Optional
 import concurrent.futures
 from logger import log_event
 from backup_service import build_backup_filename
+from device_capabilities import (
+    AUTOMATED_RESTORE_UNQUALIFIED_REASON, capabilities_by_hostname,
+)
 
 from routers.auth import get_current_admin
-from routers.auth import decrypt_secret
-from connection_utils import get_netmiko_params, get_ansible_inventory_vars
+from connection_utils import get_netmiko_params
 
 load_dotenv()
 
@@ -33,6 +33,22 @@ def get_device_meta(device: models.NetworkDevice):
         "device_type": device.device_type,
         "os_type": device.os_type
     }
+
+def _reject_mutating_backup_options(options):
+    rejected = []
+    if options.save_nvram:
+        rejected.append("save_nvram")
+    if options.save_flash:
+        rejected.append("save_flash")
+    if rejected:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Backup operations are controller/archive-only and read-only; "
+                f"unsupported device mutation option(s): {', '.join(rejected)}."
+            ),
+        )
+
 
 # --- THREAD WORKER FOR BACKUPS ---
 def process_single_backup(device: models.NetworkDevice, options: schemas.BackupOptions) -> dict:
@@ -54,16 +70,6 @@ def process_single_backup(device: models.NetworkDevice, options: schemas.BackupO
                 
             config_data = ""
 
-            if options.save_nvram and device.os_type != 'mikrotik': 
-                try: net_connect.save_config()
-                except: pass
-                
-            if options.save_flash:
-                if device.os_type == 'cisco':
-                    net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
-                elif device.os_type == 'mikrotik':
-                    net_connect.send_command("/export file=VNMS_Last_Good")
-                    
             if options.download_local or options.save_archive:
                 raw_config = net_connect.send_command(show_cmd)
                 clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
@@ -86,6 +92,7 @@ def process_single_backup(device: models.NetworkDevice, options: schemas.BackupO
 # 7. Single Backup (POST) - MULTI-VENDOR
 @router.post("/backup-device/{device_id}")
 def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    _reject_mutating_backup_options(options)
     device = db.query(models.NetworkDevice).filter(models.NetworkDevice.id == device_id).first()
     if not device: raise HTTPException(status_code=404, detail="Device not found")
     
@@ -131,6 +138,7 @@ def backup_device(device_id: int, options: schemas.BackupOptions, db: Session = 
 # 8. Bulk Backup (POST) - MULTI-VENDOR MULTITHREADED
 @router.post("/bulk-backup")
 def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_admin)):
+    _reject_mutating_backup_options(request.options)
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(request.device_ids)).all()
     if not devices:
         raise HTTPException(status_code=404, detail="No valid devices found.")
@@ -202,167 +210,52 @@ def bulk_backup(request: schemas.BulkBackupRequest, db: Session = Depends(get_db
     return StreamingResponse(zip_buffer, media_type="application/zip", headers=headers)
 
 
-# 9. RESTORE BACKUPS TO DEVICES (POST) - SECURED
+# 9. AUTOMATED RESTORE IS DISABLED UNTIL A PROFILE IS QUALIFIED
 @router.post("/restore-devices/")
 async def restore_devices(
     device_ids: str = Form(...),
     file: Optional[UploadFile] = File(None),
     archive_file: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_admin)
+    current_user: models.User = Depends(get_current_admin),
 ):
-    source_type = "Local Upload" if file else "Server Archive"
-    
     try:
         target_ids = json.loads(device_ids)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid device_ids format.")
-    
-    devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.id.in_(target_ids)).all()
+
+    devices = db.query(models.NetworkDevice).filter(
+        models.NetworkDevice.id.in_(target_ids)
+    ).all()
     if not devices:
         raise HTTPException(status_code=404, detail="No valid devices found.")
-    
-    mode_type = "Bulk" if len(devices) > 1 else "Single"
 
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            if file and file.filename:
-                actual_filename = file.filename
-                file_path = os.path.join(tmpdir, actual_filename)
-                content = await file.read()
-                with open(file_path, "wb") as f:
-                    f.write(content)
-            elif archive_file:
-                # SECURED: Strip path traversal attempts from malicious payloads
-                safe_archive_file = os.path.basename(archive_file)
-                actual_filename = safe_archive_file
-                source_path = os.path.join(ARCHIVE_DIR, safe_archive_file)
-                
-                if not os.path.exists(source_path):
-                    raise ValueError("Archive file not found on server.")
-                
-                file_path = os.path.join(tmpdir, safe_archive_file)
-                import shutil
-                shutil.copy2(source_path, file_path)
-            else:
-                raise ValueError("No configuration file provided.")
-            
-            extracted_files = {}
-            if actual_filename.endswith(".zip"):
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_ref.extractall(tmpdir)
-                    for dev in devices:
-                        match_found = False
-                        for extracted_name in zip_ref.namelist():
-                            if f"_{dev.hostname}_" in extracted_name:
-                                extracted_files[dev.hostname] = os.path.join(tmpdir, extracted_name)
-                                match_found = True
-                                break
-                        if not match_found:
-                            raise ValueError(f"Bulk Restore Aborted: Could not find '{dev.hostname}' config inside ZIP.")
-            else:
-                for dev in devices:
-                    if f"_{dev.hostname}_" in actual_filename:
-                        extracted_files[dev.hostname] = file_path
-                    else:
-                        raise ValueError(f"Safety Abort: '{actual_filename}' does not safely match target '{dev.hostname}'.")
-                    
-            # --- DYNAMIC MULTI-VENDOR INVENTORY ---
-            inventory_path = os.path.join(tmpdir, "inventory.ini")
-            with open(inventory_path, "w") as inv:
-                inv.write("[targets]\n")
-                for dev in devices:
-                    target_file = extracted_files.get(dev.hostname, "")
-                    if target_file:
-                        vars_dict = get_ansible_inventory_vars(dev)
-                        vars_string = " ".join([f'{k}="{v}"' if " " in str(v) else f'{k}={v}' for k, v in vars_dict.items()])
-                        inv.write(f'{dev.hostname} {vars_string} restore_file="{target_file}"\n')
-
-            # --- MULTI-VENDOR RESTORE PLAYBOOK ---
-            playbook_path = os.path.join(tmpdir, "restore.yml")
-            playbook_content = """
----
-- name: VNMS Multi-Vendor Configuration Restore
-  hosts: targets
-  gather_facts: no
-  tasks:
-    - name: (CISCO) Transfer Backup File
-      ansible.netcommon.net_put:
-        src: "{{ restore_file }}"
-        dest: "flash:vnms_restore.cfg"
-        protocol: scp
-      when: ansible_network_os == 'cisco.ios.ios'
-
-    - name: (CISCO) Force Configuration Replace
-      cisco.ios.ios_command:
-        commands:
-          - command: 'configure replace flash:vnms_restore.cfg force'
-      when: ansible_network_os == 'cisco.ios.ios'
-
-    - name: (MIKROTIK) Transfer Backup File
-      ansible.netcommon.net_put:
-        src: "{{ restore_file }}"
-        dest: "vnms_restore.rsc"
-        protocol: scp
-      when: ansible_network_os == 'community.routeros.routeros'
-
-    - name: (MIKROTIK) Execute Import Script
-      community.routeros.command:
-        commands:
-          - "/import file-name=vnms_restore.rsc"
-      when: ansible_network_os == 'community.routeros.routeros'
-
-    - name: (HPE/ARUBA) Push Full Config via Src
-      community.network.aruba_config:
-        src: "{{ restore_file }}"
-      when: ansible_network_os in ['community.network.aruba', 'arubanetworks.aoscx.aoscx']
-      
-    - name: (ALCATEL) Push Full Config
-      ansible.netcommon.cli_config:
-        config: "{{ lookup('file', restore_file) }}"
-      when: ansible_network_os == 'community.network.alcatel_aos'
-"""
-            with open(playbook_path, "w") as pb:
-                pb.write(playbook_content)
-
-            env = os.environ.copy()
-            env["ANSIBLE_HOST_KEY_CHECKING"] = "False"
-
-            process = await asyncio.create_subprocess_exec(
-                "ansible-playbook", "-i", inventory_path, playbook_path,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
-            )
-
-            stdout, stderr = await process.communicate()
-            output = stdout.decode()
-
-            if process.returncode != 0 or "unreachable" in output.lower() or "failed" in output.lower():
-                log_event(
-                    db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, 
-                    target_devices=[get_device_meta(d) for d in devices], 
-                    details={"action": "Configuration Restore", "mode": mode_type, "source": source_type, "file": actual_filename, "execution_status": "Failed", "ansible_logs": output[-2000:] if output else ""}
-                )
-                return {"message": "Restore finished with errors. Check Event Logs.", "logs": output, "success": False}
-            
-            log_event(
-                db=db, event_type="Maintenance", severity="SUCCESS", author=current_user.username, 
-                target_devices=[get_device_meta(d) for d in devices], 
-                details={"action": "Configuration Restore", "mode": mode_type, "source": source_type, "file": actual_filename, "execution_status": "Success", "ansible_logs": output[-2000:] if output else ""}
-            )
-            return {"message": "Restore Operations Completed Successfully.", "logs": output, "success": True}
-
-    except ValueError as ve:
-        # Catch our custom safety validation errors and log them before returning the 400
-        log_event(
-            db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, 
-            target_devices=[get_device_meta(d) for d in devices], 
-            details={"action": "Configuration Restore Validation", "mode": mode_type, "source": source_type, "file": getattr(file, 'filename', archive_file), "execution_status": "Aborted", "error": str(ve)}
-        )
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        log_event(
-            db=db, event_type="Maintenance", severity="ERROR", author=current_user.username, 
-            target_devices=[get_device_meta(d) for d in devices], 
-            details={"action": "Configuration Restore System Error", "mode": mode_type, "source": source_type, "execution_status": "Failed", "error": str(e)}
-        )
-        raise HTTPException(status_code=500, detail="Internal server error during restore execution.")
+    source_type = "Local Upload" if file else "Server Archive"
+    attempted_file = getattr(file, "filename", None) or (
+        os.path.basename(archive_file) if archive_file else None
+    )
+    details = {
+        "action": "Automated Configuration Restore Rejected",
+        "execution_status": "Unsupported",
+        "source": source_type,
+        "file": attempted_file,
+        "automated_restore": False,
+        "capability_reason": AUTOMATED_RESTORE_UNQUALIFIED_REASON,
+        "device_capabilities": capabilities_by_hostname(devices),
+        "device_contact_performed": False,
+    }
+    log_event(
+        db=db,
+        event_type="Maintenance",
+        severity="WARNING",
+        author=current_user.username,
+        target_devices=[get_device_meta(device) for device in devices],
+        details=details,
+    )
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Automated restore is unsupported for the selected platform profile. "
+            + AUTOMATED_RESTORE_UNQUALIFIED_REASON
+        ),
+    )

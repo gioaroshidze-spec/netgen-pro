@@ -1,10 +1,8 @@
 import hashlib
-import re
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -19,9 +17,14 @@ from rollback_service import (
     RollbackRejected,
     authorize_rollback,
     execute_rollback,
+    prepare_manual_restore,
+    verify_manual_restore,
     validate_preconfig_artifacts,
 )
-from routers import auth, configuration
+from routers import auth, configuration, jobs, maintenance
+from device_capabilities import (
+    AUTOMATED_RESTORE_UNQUALIFIED_REASON, get_device_capabilities,
+)
 from verification_service import (
     VerificationConflict,
     parse_verification_output,
@@ -218,7 +221,7 @@ def test_authorization_is_device_io_free_server_generated_and_single_active(db, 
     contacted = []
     monkeypatch.setattr(rollback_service, "create_prerollback_backups", lambda *a, **k: contacted.append(True))
     rollback = authorize_rollback(db, change, "admin", "Operational rollback required.", tmp_path, audit_logger=lambda **kwargs: None)
-    assert rollback.status == "authorized" and len(rollback.rollback_id) == 36
+    assert rollback.status == "manual_restore_required" and len(rollback.rollback_id) == 36
     assert contacted == []
     with pytest.raises(RollbackRejected, match="active"):
         authorize_rollback(db, change, "admin", "Another valid rollback reason.", tmp_path, audit_logger=lambda **kwargs: None)
@@ -233,7 +236,7 @@ def test_active_rollback_rejects_overlapping_targets_but_allows_nonoverlap(db, t
         db, first, "admin", "Keep the first rollback active.", tmp_path,
         audit_logger=lambda **kwargs: None,
     )
-    assert active.status == "authorized"
+    assert active.status == "manual_restore_required"
 
     overlapping = add_change(db, ("sw1",))
     bind_artifact(db, tmp_path, overlapping, "sw1", "hostname sw1\n")
@@ -249,7 +252,7 @@ def test_active_rollback_rejects_overlapping_targets_but_allows_nonoverlap(db, t
         db, nonoverlapping, "admin", "Allow this independent rollback.",
         tmp_path, audit_logger=lambda **kwargs: None,
     )
-    assert allowed.status == "authorized"
+    assert allowed.status == "manual_restore_required"
 
 
 def test_overlapping_active_rollback_authorization_returns_http_409(db, tmp_path, monkeypatch):
@@ -287,7 +290,7 @@ def test_newer_overlap_blocks_but_nonoverlap_and_deployment_failed_are_eligible(
     bind_artifact(db, tmp_path, old)
     add_change(db, ("sw2",), started=datetime.now(timezone.utc) - timedelta(hours=1))
     authorized = authorize_rollback(db, old, "admin", "Partial deployment recovery.", tmp_path, audit_logger=lambda **kwargs: None)
-    assert authorized.status == "authorized"
+    assert authorized.status == "manual_restore_required"
     authorized.status = "rollback_failed"
     db.commit()
     add_change(db, ("sw1",), started=datetime.now(timezone.utc))
@@ -295,15 +298,20 @@ def test_newer_overlap_blocks_but_nonoverlap_and_deployment_failed_are_eligible(
         authorize_rollback(db, old, "admin", "Stale rollback should be rejected.", tmp_path, audit_logger=lambda **kwargs: None)
 
 
-def test_unsupported_vendor_and_verified_without_authorization_fail_closed(db, tmp_path):
-    add_device(db, os_type="mikrotik")
+def test_unknown_vendor_manual_handoff_and_automated_restore_fail_closed(db, tmp_path):
+    add_device(db, os_type="unknown-os")
     change = add_change(db)
     bind_artifact(db, tmp_path, change)
-    with pytest.raises(RollbackRejected, match="Cisco IOS"):
-        authorize_rollback(db, change, "admin", "Unsupported vendor recovery.", tmp_path, audit_logger=lambda **kwargs: None)
-    fake = SimpleNamespace(change_id=change.change_id, status="authorized")
-    with pytest.raises(RollbackRejected):
-        execute_rollback(db, change, fake, "admin", tmp_path, audit_logger=lambda **kwargs: None)
+    rollback = authorize_rollback(
+        db, change, "admin", "Unsupported vendor recovery.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    assert rollback.status == "manual_restore_required"
+    with pytest.raises(RollbackRejected, match="Automated restore is unsupported"):
+        execute_rollback(
+            db, change, rollback, "admin", tmp_path,
+            audit_logger=lambda **kwargs: None,
+        )
 
 
 def backup_result(tmp_path, prefix, content="hostname sw1\n", success=True):
@@ -324,359 +332,269 @@ def authorized_change(db, tmp_path):
     return device, change, rollback
 
 
-def test_cisco_adapter_uses_only_bounded_file_preflight_and_separate_replace(tmp_path, monkeypatch):
-    source = tmp_path / "Pre_Config_cisco_switch_sw1_20260810_120000.txt"
-    source.write_text("hostname sw1\n")
-    artifact = SimpleNamespace(filename=source.name)
-    captured = []
-
-    def subprocess_runner(command, **kwargs):
-        inventory = yaml.safe_load(open(command[2], encoding="utf-8"))
-        playbook = yaml.safe_load(open(command[3], encoding="utf-8"))
-        captured.append({"inventory": inventory, "playbook": playbook, "command": command})
-        return SimpleNamespace(returncode=0, stdout=recap())
-
-    monkeypatch.setattr(rollback_service, "get_ansible_inventory_vars", lambda device: {"ansible_host": "192.0.2.10"})
-    success, results, _ = rollback_service.run_cisco_restore(
-        [SimpleNamespace(hostname="sw1")], {"sw1": (artifact, source)},
-        "12345678-1234-1234-1234-123456789abc", subprocess_runner,
-    )
-    assert len(captured) == 2
-    host_vars = captured[0]["inventory"]["all"]["hosts"]["sw1"]
-    prepare_tasks = captured[0]["playbook"][0]["tasks"]
-    replace_tasks = captured[1]["playbook"][0]["tasks"]
-    assert success is True and results["sw1"]["status"] == "restored"
-    assert host_vars["restore_file"] == str(source)
-    assert host_vars["restore_file_size"] == source.stat().st_size
-    transfer = next(
-        task for task in prepare_tasks
-        if "ansible.netcommon.net_put" in task
-    )
-    assert transfer["ansible.netcommon.net_put"] == {
-        "src": "{{ restore_file }}", "dest": "flash:vnms_rollback.cfg",
-        "protocol": "scp", "mode": "binary",
-    }
-    assert replace_tasks[0]["cisco.ios.ios_command"]["commands"] == [
-        {"command": "configure replace flash:vnms_rollback.cfg force"}
-    ]
-    prepare_text = yaml.safe_dump(captured[0]["playbook"])
-    replace_text = yaml.safe_dump(captured[1]["playbook"])
-    assert "configure replace" not in prepare_text
-    assert "net_put" not in replace_text
-    assert "vnms_rollback_12345678" not in prepare_text + replace_text
-
-    commands = [
-        item["command"]
-        for task in prepare_tasks
-        for item in task.get("cisco.ios.ios_command", {}).get("commands", [])
-    ]
-    delete_commands = [command for command in commands if command.startswith("delete ")]
-    assert delete_commands == ["delete /force flash:vnms_rollback.cfg"]
-    assert commands.count("dir flash:vnms_rollback.cfg") == 3
-    assert "dir flash:" in commands
-    assert next(task for task in prepare_tasks if task["name"] == "Remove only the existing VNMS-owned rollback file")["when"] == "vnms_temp_exists | bool"
-    assert any("bytes free" in str(task) for task in prepare_tasks)
-    assert any("determinably insufficient" in task["name"] for task in prepare_tasks)
-    size_extract = next(
-        task for task in prepare_tasks
-        if task["name"] == "Extract the exact transferred VNMS rollback file size"
-    )
-    assert rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN in (
-        size_extract["ansible.builtin.set_fact"]["vnms_transferred_size_matches"]
-    )
-    unique_size = next(
-        task for task in prepare_tasks
-        if task["name"] == "Require a uniquely parseable transferred file size"
-    )
-    assert unique_size["ansible.builtin.assert"]["that"] == [
-        "vnms_transferred_size_matches | length == 1"
-    ]
-    matching_size = next(
-        task for task in prepare_tasks
-        if task["name"] == "Require the transferred file size to match the validated artifact"
-    )
-    assert matching_size["ansible.builtin.assert"]["that"] == [
-        "(vnms_transferred_size_matches | first | int) == (restore_file_size | int)"
-    ]
-    forbidden = ("startup-config", "config.text", "vlan.dat", "/recursive", "*.cfg")
-    assert all(value not in prepare_text + replace_text for value in forbidden)
+def test_capabilities_default_false_cisco_does_not_enable_and_unknown_fails_closed():
+    assert get_device_capabilities().automated_restore is False
+    cisco = get_device_capabilities(SimpleNamespace(os_type="cisco", is_legacy=False))
+    unknown = get_device_capabilities(SimpleNamespace(os_type="future-vendor"))
+    assert cisco.automated_restore is False
+    assert cisco.automated_restore_reason == AUTOMATED_RESTORE_UNQUALIFIED_REASON
+    assert unknown.automated_restore is False
+    assert unknown.backup is False
 
 
-def test_missing_transferred_file_prevents_configure_replace(tmp_path, monkeypatch):
-    source = tmp_path / "Pre_Config_cisco_switch_sw1_20260810_120000.txt"
-    source.write_text("hostname sw1\n")
-    artifact = SimpleNamespace(filename=source.name)
-    playbooks = []
-
-    def subprocess_runner(command, **kwargs):
-        playbooks.append(yaml.safe_load(open(command[3], encoding="utf-8")))
-        return SimpleNamespace(
-            returncode=2,
-            stdout=recap(failed=1, complete=False)
-            + "The exact transferred VNMS rollback file is not present.\n",
-        )
-
-    monkeypatch.setattr(
-        rollback_service, "get_ansible_inventory_vars",
-        lambda device: {"ansible_host": "192.0.2.10"},
-    )
-    success, results, summary = rollback_service.run_cisco_restore(
-        [SimpleNamespace(hostname="sw1")], {"sw1": (artifact, source)},
-        "ignored-rollback-id", subprocess_runner,
-    )
-    assert success is False
-    assert results["sw1"]["status"] == "prepare_failed"
-    assert "exact transferred VNMS rollback file" in summary
-    assert len(playbooks) == 1
-    assert "configure replace" not in yaml.safe_dump(playbooks[0])
-
-
-@pytest.mark.parametrize(
-    ("size_case", "size_delta", "replace_expected"),
-    [
-        pytest.param("matching", 0, True, id="matching-remote-size"),
-        pytest.param("smaller", -1, False, id="smaller-truncated-remote-size"),
-        pytest.param("larger", 1, False, id="larger-remote-size"),
-        pytest.param("unparseable", None, False, id="unparseable-remote-size"),
-    ],
-)
-def test_transferred_file_size_gate_controls_configure_replace(
-    tmp_path, monkeypatch, size_case, size_delta, replace_expected,
-):
-    source = tmp_path / "Pre_Config_cisco_switch_sw1_20260810_120000.txt"
-    source.write_text("hostname sw1\n")
-    artifact = SimpleNamespace(filename=source.name)
-    playbooks = []
-
-    size_text = (
-        "unknown"
-        if size_delta is None
-        else str(source.stat().st_size + size_delta)
-    )
-    remote_listing = (
-        "Directory of flash:/vnms_rollback.cfg\n"
-        f"  17  -rw-  {size_text}  Aug 11 2026 12:00:00 +00:00  vnms_rollback.cfg\n"
-        "15998976 bytes total (12000000 bytes free)\n"
-    )
-
-    def subprocess_runner(command, **kwargs):
-        inventory = yaml.safe_load(open(command[2], encoding="utf-8"))
-        playbook = yaml.safe_load(open(command[3], encoding="utf-8"))
-        playbooks.append(playbook)
-        if len(playbooks) == 1:
-            prepare_tasks = playbook[0]["tasks"]
-            size_fact = next(
-                task for task in prepare_tasks
-                if task["name"] == "Extract the exact transferred VNMS rollback file size"
-            )
-            assert rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN in (
-                size_fact["ansible.builtin.set_fact"]["vnms_transferred_size_matches"]
-            )
-            remote_matches = re.findall(
-                rollback_service._CISCO_ROLLBACK_DIR_ENTRY_PATTERN,
-                remote_listing,
-            )
-            local_size = inventory["all"]["hosts"]["sw1"]["restore_file_size"]
-            size_is_valid = (
-                len(remote_matches) == 1
-                and int(remote_matches[0]) == local_size
-            )
-            return SimpleNamespace(
-                returncode=0 if size_is_valid else 2,
-                stdout=(
-                    recap()
-                    if size_is_valid
-                    else recap(failed=1, complete=False)
-                    + f"Transferred file size validation failed: {size_case}.\n"
-                ),
-            )
-        return SimpleNamespace(returncode=0, stdout=recap())
-
-    monkeypatch.setattr(
-        rollback_service, "get_ansible_inventory_vars",
-        lambda device: {"ansible_host": "192.0.2.10"},
-    )
-    success, results, _ = rollback_service.run_cisco_restore(
-        [SimpleNamespace(hostname="sw1")], {"sw1": (artifact, source)},
-        "ignored-rollback-id", subprocess_runner,
-    )
-
-    assert success is replace_expected
-    assert results["sw1"]["status"] == (
-        "restored" if replace_expected else "prepare_failed"
-    )
-    assert len(playbooks) == (2 if replace_expected else 1)
-    if replace_expected:
-        assert "configure replace flash:vnms_rollback.cfg force" in yaml.safe_dump(
-            playbooks[1]
-        )
-    else:
-        assert all(
-            "configure replace" not in yaml.safe_dump(playbook)
-            for playbook in playbooks
-        )
-
-
-def test_cleanup_adapter_deletes_only_exact_vnms_owned_file(tmp_path, monkeypatch):
-    captured = {}
-
-    def subprocess_runner(command, **kwargs):
-        captured["playbook"] = yaml.safe_load(open(command[3], encoding="utf-8"))
-        return SimpleNamespace(returncode=0, stdout=recap())
-
-    monkeypatch.setattr(
-        rollback_service, "get_ansible_inventory_vars",
-        lambda device: {"ansible_host": "192.0.2.10"},
-    )
-    success, results, _ = rollback_service.cleanup_cisco_rollback_temp(
-        [SimpleNamespace(hostname="sw1")], subprocess_runner,
-    )
-    assert success is True and results["sw1"]["status"] == "cleaned"
-    cleanup_text = yaml.safe_dump(captured["playbook"])
-    commands = [
-        item["command"]
-        for task in captured["playbook"][0]["tasks"]
-        for item in task.get("cisco.ios.ios_command", {}).get("commands", [])
-    ]
-    assert [command for command in commands if command.startswith("delete ")] == [
-        "delete /force flash:vnms_rollback.cfg"
-    ]
-    assert commands.count("dir flash:vnms_rollback.cfg") == 2
-    assert all(value not in cleanup_text for value in (
-        "startup-config", "config.text", "vlan.dat", "/recursive", "*.cfg"
-    ))
-
-
-def test_prerollback_precedes_exact_restore_and_match_is_rolled_back(db, tmp_path):
+def test_automated_restore_code_and_device_operations_are_absent(db, tmp_path):
     _, change, rollback = authorized_change(db, tmp_path)
-    order = []
-    def pre(*args, **kwargs):
-        order.append("pre")
-        return backup_result(tmp_path, "Pre_Rollback", "current state\n")
-    def restore(devices, artifacts, rollback_id):
-        order.append("restore")
-        assert artifacts["sw1"][1].read_text() == "hostname sw1\n"
-        return True, {"sw1": {"status": "restored"}}, "ok"
-    def post(*args, **kwargs):
-        order.append("post")
-        return backup_result(tmp_path, "Post_Rollback", "hostname sw1\r\n! Last configuration change at 12:00 UTC\n")
-    def cleanup(devices):
-        order.append("cleanup")
-        return True, {"sw1": {"status": "cleaned"}}, "ok"
-    result = execute_rollback(
-        db, change, rollback, "admin", tmp_path, pre, post, restore, cleanup,
-        audit_logger=lambda **kwargs: None,
-    )
-    assert order == ["pre", "restore", "post", "cleanup"]
-    assert result.status == "rolled_back"
-    assert result.verification_results["sw1"]["matches_pre_config"] is True
-    assert result.per_device_results["sw1"]["temporary_file_cleanup"]["status"] == "cleaned"
-    with pytest.raises(RollbackRejected):
+    source = open(rollback_service.__file__, encoding="utf-8").read()
+    for forbidden in (
+        "net_put", "cli_restore", "configure replace", "copy_file(",
+        "send_command(", "dir flash:", "bytes free",
+    ):
+        assert forbidden not in source
+    with pytest.raises(RollbackRejected, match="Automated restore is unsupported"):
         execute_rollback(
-            db, change, rollback, "admin", tmp_path, pre, post, restore, cleanup,
+            db, change, rollback, "admin", tmp_path,
+            audit_logger=lambda **kwargs: None,
+        )
+    assert rollback.status == "manual_restore_required"
+
+
+def test_prepare_manual_restore_captures_central_prerollback_only_and_is_single_use(
+    db, tmp_path,
+):
+    _, change, rollback = authorized_change(db, tmp_path)
+    calls = []
+    events = []
+
+    def central_backup(devices, archive_dir=None):
+        calls.append(([device.hostname for device in devices], archive_dir))
+        return backup_result(tmp_path, "Pre_Rollback", "current state\n")
+
+    result = prepare_manual_restore(
+        db, change, rollback, "admin", tmp_path,
+        backup_runner=central_backup, audit_logger=lambda **kwargs: events.append(kwargs),
+    )
+    assert calls == [(["sw1"], tmp_path)]
+    assert events[-1]["details"]["device_contact_performed"] is True
+    assert result.status == "manual_restore_ready"
+    assert result.pre_rollback_files["sw1"].startswith("Pre_Rollback_")
+    artifact = db.query(models.ConfigurationBackupArtifact).filter_by(
+        rollback_id=rollback.rollback_id, artifact_type="pre_rollback"
+    ).one()
+    assert artifact.sha256 and artifact.size_bytes > 0
+    with pytest.raises(RollbackRejected, match="single-use"):
+        prepare_manual_restore(
+            db, change, rollback, "admin", tmp_path,
+            backup_runner=lambda *args, **kwargs: pytest.fail("must not capture twice"),
             audit_logger=lambda **kwargs: None,
         )
 
 
-def test_any_prerollback_failure_prevents_all_restore(db, tmp_path):
+@pytest.mark.parametrize(
+    ("post_content", "post_success", "expected"),
+    [
+        ("hostname sw1\r\n! Last configuration change at 12:00 UTC\n", True,
+         "manual_restore_verified"),
+        ("hostname different\n", True, "manual_restore_verification_failed"),
+        ("hostname sw1\n", False, "manual_restore_verification_error"),
+    ],
+)
+def test_verify_manual_restore_captures_and_compares_without_mutation(
+    db, tmp_path, post_content, post_success, expected,
+):
     _, change, rollback = authorized_change(db, tmp_path)
-    restore_calls = []
-    result = execute_rollback(
+    prepare_manual_restore(
         db, change, rollback, "admin", tmp_path,
-        lambda *a, **k: backup_result(tmp_path, "Pre_Rollback", success=False),
-        lambda *a, **k: None,
-        lambda *a, **k: restore_calls.append(True),
-        audit_logger=lambda **kwargs: None,
-    )
-    assert result.status == "pre_rollback_failed"
-    assert restore_calls == []
-
-
-@pytest.mark.parametrize(("restore_success", "post_content", "post_success", "expected"), [
-    (True, "different config\n", True, "rollback_verification_failed"),
-    (False, "hostname sw1\n", True, "rollback_failed"),
-    (True, "hostname sw1\n", False, "rollback_verification_failed"),
-])
-def test_restore_and_post_verification_failures_never_report_success(db, tmp_path, restore_success, post_content, post_success, expected):
-    _, change, rollback = authorized_change(db, tmp_path)
-    cleanup_calls = []
-    restore = lambda *a: (restore_success, {"sw1": {"status": "restored" if restore_success else "restore_failed"}}, "restore error")
-    post = lambda *a, **k: backup_result(tmp_path, "Post_Rollback", post_content, post_success)
-    result = execute_rollback(
-        db, change, rollback, "admin", tmp_path,
-        lambda *a, **k: backup_result(tmp_path, "Pre_Rollback", "current\n"),
-        post, restore,
-        lambda *a, **k: cleanup_calls.append(True),
-        audit_logger=lambda **kwargs: None,
-    )
-    assert result.status == expected
-    assert cleanup_calls == []
-
-
-def test_restore_failure_persists_and_audits_bounded_sanitized_ansible_summary(db, tmp_path):
-    _, change, rollback = authorized_change(db, tmp_path)
-    events = []
-    sensitive_summary = (
-        ("old output\n" * 600)
-        + "TASK [Transfer integrity-validated Pre_Config artifact]\n"
-        + "fatal: [sw1]: FAILED! => scp package missing "
-        + "ansible_password='plain-password' token=api-token "
-        + "encrypted_password=ciphertext\n"
-        + "Authorization: Bearer bearer-token\n"
-        + "-----BEGIN PRIVATE KEY-----\nprivate-material\n"
-        + "-----END PRIVATE KEY-----\n"
-    )
-
-    result = execute_rollback(
-        db, change, rollback, "admin", tmp_path,
-        lambda *a, **k: backup_result(tmp_path, "Pre_Rollback", "current\n"),
-        lambda *a, **k: None,
-        lambda *a: (
-            False, {"sw1": {"status": "restore_failed"}}, sensitive_summary
+        backup_runner=lambda *args, **kwargs: backup_result(
+            tmp_path, "Pre_Rollback", "current state\n"
         ),
+        audit_logger=lambda **kwargs: None,
+    )
+    calls = []
+
+    def post_capture(devices, archive_dir=None):
+        calls.append(([device.hostname for device in devices], archive_dir))
+        return backup_result(
+            tmp_path, "Post_Rollback", post_content, post_success
+        )
+
+    result = verify_manual_restore(
+        db, change, rollback, "admin", tmp_path,
+        post_backup_runner=post_capture, audit_logger=lambda **kwargs: None,
+    )
+    assert calls == [(["sw1"], tmp_path)]
+    assert result.status == expected
+    if expected == "manual_restore_verified":
+        assert result.verification_results["sw1"]["matches_pre_config"] is True
+    elif expected == "manual_restore_verification_failed":
+        assert result.verification_results["sw1"]["matches_pre_config"] is False
+    else:
+        assert result.verification_results["sw1"]["status"] == "verification_error"
+
+
+def test_manual_restore_handoff_audit_has_metadata_no_secrets(db, tmp_path):
+    add_device(db)
+    change = add_change(db)
+    artifact = bind_artifact(db, tmp_path, change)
+    events = []
+    rollback = authorize_rollback(
+        db, change, "admin", "Audited manual restore reason.", tmp_path,
         audit_logger=lambda **kwargs: events.append(kwargs),
     )
+    details = events[-1]["details"]
+    assert details["rollback_id"] == rollback.rollback_id
+    assert details["change_id"] == change.change_id
+    assert details["target_hostnames"] == ["sw1"]
+    assert details["artifacts"]["sw1"] == {
+        "filename": artifact.filename,
+        "sha256": artifact.sha256,
+        "size_bytes": artifact.size_bytes,
+    }
+    assert details["automated_restore"] is False
+    assert details["device_contact_performed"] is False
+    assert "ciphertext" not in str(details)
+    assert "hostname sw1" not in str(details)
 
-    failure_event = events[-1]
-    assert result.status == "rollback_failed"
-    assert result.error == failure_event["details"]["restore_summary"]
-    assert len(result.error) <= 4000
-    assert "TASK [Transfer integrity-validated Pre_Config artifact]" in result.error
-    assert "scp package missing" in result.error
-    assert "[REDACTED]" in result.error
-    assert "plain-password" not in result.error
-    assert "api-token" not in result.error
-    assert "ciphertext" not in result.error
-    assert "bearer-token" not in result.error
-    assert "private-material" not in result.error
-    assert "network-user" not in str(failure_event)
+
+def test_manual_restore_endpoints_are_admin_only_and_bodies_are_strict(
+    db, tmp_path, monkeypatch,
+):
+    add_device(db)
+    change = add_change(db)
+    bind_artifact(db, tmp_path, change)
+    rollback = authorize_rollback(
+        db, change, "admin", "Valid manual restore reason.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.dependency_overrides[get_db] = lambda: db
+    monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
+    headers = {"Authorization": "Bearer x"}
+    with TestClient(app) as client:
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="viewer", role="viewer"
+        )
+        for action in ("prepare-manual-restore", "verify-manual-restore"):
+            response = client.post(
+                f"/configuration/changes/{change.change_id}/{action}",
+                json={"rollback_id": rollback.rollback_id}, headers=headers,
+            )
+            assert response.status_code == 403
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="admin", role="admin"
+        )
+        response = client.post(
+            f"/configuration/changes/{change.change_id}/prepare-manual-restore",
+            json={"rollback_id": rollback.rollback_id, "filename": "forbidden"},
+            headers=headers,
+        )
+        assert response.status_code == 422
 
 
-def test_artifact_revalidated_before_restore_and_audit_has_ids_actor_no_secrets(db, tmp_path):
-    _, change, rollback = authorized_change(db, tmp_path)
-    (tmp_path / change.pre_backup_files["sw1"]).write_text("tampered")
-    calls = []
-    with pytest.raises(RollbackRejected, match="integrity"):
-        execute_rollback(db, change, rollback, "admin", tmp_path,
-                         lambda *a, **k: calls.append("backup"),
-                         lambda *a, **k: calls.append("post"),
-                         lambda *a, **k: calls.append("restore"),
-                         audit_logger=lambda **kwargs: None)
-    assert calls == []
-
-    db.delete(rollback)
-    db.commit()
-    bind = db.query(models.ConfigurationBackupArtifact).filter_by(change_id=change.change_id).one()
-    data = b"hostname sw1\n"
-    (tmp_path / bind.filename).write_bytes(data)
-    bind.sha256, bind.size_bytes = hashlib.sha256(data).hexdigest(), len(data)
-    db.commit()
+def test_maintenance_restore_is_rejected_before_playbook_or_device_contact(
+    db, monkeypatch,
+):
+    device = add_device(db)
     events = []
-    new_rollback = authorize_rollback(db, change, "admin", "Audited rollback reason.", tmp_path, audit_logger=lambda **kwargs: events.append(kwargs))
-    event_text = str(events[-1])
-    assert change.change_id in event_text and new_rollback.rollback_id in event_text
-    assert events[-1]["author"] == "admin"
-    assert "ciphertext" not in event_text and "network-user" not in event_text
+    monkeypatch.setattr(maintenance, "log_event", lambda **kwargs: events.append(kwargs))
+    app = FastAPI()
+    app.include_router(maintenance.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+        username="admin", role="admin"
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/restore-devices/",
+            data={"device_ids": f"[{device.id}]", "archive_file": "backup.txt"},
+            headers={"Authorization": "Bearer x"},
+        )
+    assert response.status_code == 409
+    assert "unsupported" in response.json()["detail"].lower()
+    assert events[-1]["details"]["device_contact_performed"] is False
+    source = open(maintenance.__file__, encoding="utf-8").read()
+    for forbidden in ("net_put", "configure replace", "create_subprocess_exec"):
+        assert forbidden not in source
+
+
+@pytest.mark.parametrize("flag", ["save_flash", "save_nvram"])
+def test_mutating_manual_backup_options_are_rejected_before_capture(
+    db, monkeypatch, flag,
+):
+    device = add_device(db)
+    contacted = []
+    monkeypatch.setattr(
+        maintenance, "process_single_backup",
+        lambda *args, **kwargs: contacted.append(True),
+    )
+    app = FastAPI()
+    app.include_router(maintenance.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+        username="admin", role="admin"
+    )
+    payload = {
+        "save_nvram": flag == "save_nvram",
+        "save_flash": flag == "save_flash",
+        "download_local": True,
+        "save_archive": True,
+        "prefix": "safe",
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            f"/backup-device/{device.id}", json=payload,
+            headers={"Authorization": "Bearer x"},
+        )
+    assert response.status_code == 422
+    assert contacted == []
+
+
+@pytest.mark.parametrize("flag", ["save_flash", "save_nvram"])
+def test_mutating_scheduled_backup_options_are_rejected(
+    db, monkeypatch, flag,
+):
+    scheduler_calls = []
+    monkeypatch.setattr(
+        jobs, "sync_jobs_to_scheduler", lambda: scheduler_calls.append(True)
+    )
+    app = FastAPI()
+    app.include_router(jobs.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+        username="admin", role="admin"
+    )
+    payload = {
+        "name": "read-only backup",
+        "job_type": "backup",
+        "target_devices": ["sw1"],
+        "job_payload": {
+            "save_nvram": flag == "save_nvram",
+            "save_flash": flag == "save_flash",
+            "save_archive": True,
+        },
+        "cron_day_of_week": "*",
+        "cron_hour": "1",
+        "cron_minute": "0",
+    }
+    with TestClient(app) as client:
+        response = client.post(
+            "/jobs/", json=payload,
+            headers={"Authorization": "Bearer x"},
+        )
+    assert response.status_code == 422
+    assert db.query(models.ScheduledJob).count() == 0
+    assert scheduler_calls == []
+
+
+def test_scheduled_backup_source_contains_no_device_mutation():
+    import inspect
+    import scheduler_engine
+
+    source = inspect.getsource(scheduler_engine.execute_scheduled_job)
+    assert "save_config" not in source
+    assert "send_command_timing" not in source
+    assert "VNMS_Last_Good" not in source
+    assert "send_command(show_cmd)" in source
 
 
 def test_phase3_endpoints_enforce_rbac_and_strict_bodies(db, tmp_path, monkeypatch):
@@ -689,17 +607,26 @@ def test_phase3_endpoints_enforce_rbac_and_strict_bodies(db, tmp_path, monkeypat
     monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
     with TestClient(app) as client:
         auth_headers = {"Authorization": "Bearer x"}
-        assert client.post(f"/configuration/changes/{change.change_id}/authorize-rollback", json={"reason": "Valid rollback reason."}).status_code == 401
-        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(username="viewer", role="viewer")
-        assert client.post(f"/configuration/changes/{change.change_id}/authorize-rollback", json={"reason": "Valid rollback reason."}, headers=auth_headers).status_code == 403
-        assert client.post(f"/configuration/changes/{change.change_id}/verify", json={}, headers=auth_headers).status_code == 403
-        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(username="admin", role="admin")
         endpoint = f"/configuration/changes/{change.change_id}/authorize-rollback"
+        assert client.post(endpoint, json={"reason": "Valid rollback reason."}).status_code == 401
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="viewer", role="viewer"
+        )
+        assert client.post(endpoint, json={"reason": "Valid rollback reason."}, headers=auth_headers).status_code == 403
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="admin", role="admin"
+        )
         assert client.post(endpoint, json={"reason": "short"}, headers=auth_headers).status_code == 422
         assert client.post(endpoint, json={"reason": "x" * 1001}, headers=auth_headers).status_code == 422
         assert client.post(endpoint, json={"reason": "Valid rollback reason.", "targets": ["evil"]}, headers=auth_headers).status_code == 422
-        assert client.post(f"/configuration/changes/{change.change_id}/rollback",
-                           json={"rollback_id": "x", "filename": "evil"}, headers=auth_headers).status_code == 422
-        status = client.get(f"/configuration/changes/{change.change_id}", headers=auth_headers)
+        assert client.post(
+            f"/configuration/changes/{change.change_id}/rollback",
+            json={"rollback_id": "x", "filename": "evil"}, headers=auth_headers,
+        ).status_code == 422
+        status = client.get(
+            f"/configuration/changes/{change.change_id}", headers=auth_headers
+        )
         assert status.status_code == 200
-        assert "config_payload" not in status.json() and "encrypted_password" not in status.text
+        assert status.json()["rollback"]["automated_restore"] is False
+        assert "config_payload" not in status.json()
+        assert "encrypted_password" not in status.text

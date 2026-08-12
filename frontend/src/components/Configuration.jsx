@@ -3,6 +3,12 @@ import { useState, useRef, useEffect } from 'react';
 // --- DYNAMIC API ROUTING ---
 const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
+const RETRYABLE_MANUAL_RESTORE_STATES = new Set([
+  "manual_restore_prepare_failed",
+  "manual_restore_verification_failed",
+  "manual_restore_verification_error"
+]);
+
 export default function Configuration({ selectedSwitches, selectedRouters, loadedTemplate, setLoadedTemplate, userRole }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isAiGenerating, setIsAiGenerating] = useState(false);
@@ -26,7 +32,8 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   const [rollbackReason, setRollbackReason] = useState('');
   const [isReverifying, setIsReverifying] = useState(false);
   const [isAuthorizingRollback, setIsAuthorizingRollback] = useState(false);
-  const [isRollingBack, setIsRollingBack] = useState(false);
+  const [isPreparingManualRestore, setIsPreparingManualRestore] = useState(false);
+  const [isVerifyingManualRestore, setIsVerifyingManualRestore] = useState(false);
   const changeIdRef = useRef(null);
   const terminalEndRef = useRef(null); 
 
@@ -98,31 +105,49 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Rollback authorization failed.');
+      setRollbackReason('');
       await refreshChangeStatus(changeId);
     } catch (err) {
       setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
     } finally { setIsAuthorizingRollback(false); }
   };
 
-  const executeRollback = async () => {
+  const prepareManualRestore = async () => {
     const rollbackId = changeStatus?.rollback?.rollback_id;
     if (!rollbackId) return;
-    const warning = 'HIGH-RISK FULL CONFIGURATION ROLLBACK\n\nThis operation may replace the full device configuration.\nManagement connectivity may be interrupted.\nOut-of-band/console access is recommended.\n\nExecute the authorized rollback?';
-    if (!window.confirm(warning)) return;
-    setIsRollingBack(true);
+    setIsPreparingManualRestore(true);
     try {
-      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/rollback`, {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/prepare-manual-restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ rollback_id: rollbackId })
       });
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Rollback failed.');
+      if (!response.ok) throw new Error(data.detail || 'Manual restore preparation failed.');
       await refreshChangeStatus(changeId);
     } catch (err) {
       setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
       await refreshChangeStatus(changeId).catch(() => {});
-    } finally { setIsRollingBack(false); }
+    } finally { setIsPreparingManualRestore(false); }
+  };
+
+  const verifyManualRestore = async () => {
+    const rollbackId = changeStatus?.rollback?.rollback_id;
+    if (!rollbackId) return;
+    setIsVerifyingManualRestore(true);
+    try {
+      const response = await fetch(`${API_BASE}/configuration/changes/${changeId}/verify-manual-restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` },
+        body: JSON.stringify({ rollback_id: rollbackId })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Manual restore verification failed.');
+      await refreshChangeStatus(changeId);
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+      await refreshChangeStatus(changeId).catch(() => {});
+    } finally { setIsVerifyingManualRestore(false); }
   };
 
   const handleGenerateConfig = () => {
@@ -458,7 +483,7 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           {changeStatus.status === 'verified' && <><h3 style={{ color: '#4caf50' }}>Post-Change Verification Passed</h3><p>All target devices are converged.</p></>}
           {changeStatus.status === 'verification_failed' && <><h3 style={{ color: '#ff6b6b' }}>Post-Change Verification Failed</h3><p>One or more devices still differ from the approved desired state.</p></>}
           {changeStatus.status === 'verification_error' && <><h3 style={{ color: '#e6a23c' }}>Post-Change Verification Inconclusive</h3><p>VNMS could not reliably determine final state.</p></>}
-          {changeStatus.status === 'deployment_failed' && <><h3 style={{ color: '#ff6b6b' }}>Production Deployment Failed</h3><p><strong>Partial deployment may have occurred.</strong> Rollback will restore the full pre-change configuration.</p></>}
+          {changeStatus.status === 'deployment_failed' && <><h3 style={{ color: '#ff6b6b' }}>Production Deployment Failed</h3><p><strong>Partial deployment may have occurred.</strong> A validated central Pre_Config artifact is available for the controlled manual restore workflow.</p></>}
           {changeStatus.latest_verification?.per_device_results && (
             <div style={{ fontFamily: 'monospace', fontSize: '0.9rem' }}>
               {Object.entries(changeStatus.latest_verification.per_device_results).map(([host, result]) => (
@@ -472,9 +497,12 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
               {isReverifying ? 'Re-verifying...' : 'Re-run Deterministic Verification'}
             </button>
           )}
-          {canPush && changeStatus.rollback?.eligible && !changeStatus.rollback.authorized && !changeStatus.rollback.status && (
+          {canPush && changeStatus.rollback?.eligible && !changeStatus.rollback.authorized && (
             <div style={{ marginTop: '18px', borderTop: '1px solid #555', paddingTop: '15px' }}>
               <strong>Controlled Rollback Authorization</strong>
+              {RETRYABLE_MANUAL_RESTORE_STATES.has(changeStatus.rollback.status) && (
+                <p style={{ color: '#ff6b6b' }}>The prior manual restore attempt ended in a terminal failure. A new rollback authorization and reason are required; the old rollback ID cannot be reused.</p>
+              )}
               <p style={{ color: '#e6a23c' }}>Full restore can interrupt management connectivity. VNMS history cannot detect every out-of-band/manual change.</p>
               <textarea value={rollbackReason} onChange={e => setRollbackReason(e.target.value)} maxLength={1000}
                 placeholder="Required rollback reason (10–1000 characters)"
@@ -486,13 +514,36 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
             </div>
           )}
           {canPush && changeStatus.rollback?.authorized && (
-            <div style={{ marginTop: '18px', border: '2px solid #d32f2f', padding: '15px' }}>
-              <strong style={{ color: '#ff6b6b' }}>Rollback Authorized</strong>
-              <p>This operation may replace the full device configuration. Management connectivity may be interrupted. Out-of-band/console access is recommended.</p>
-              <button onClick={executeRollback} disabled={isRollingBack}
-                style={{ padding: '10px 18px', backgroundColor: '#d32f2f', color: 'white', border: 'none', fontWeight: 'bold' }}>
-                {isRollingBack ? 'Executing Rollback...' : 'Execute Rollback'}
-              </button>
+            <div style={{ marginTop: '18px', border: '2px solid #e6a23c', padding: '15px' }}>
+              <strong style={{ color: '#e6a23c' }}>Manual Restore Required</strong>
+              <p>Automated restore is not qualified for this platform/version. Use the validated central Pre_Config artifact with the vendor-approved manual restore procedure.</p>
+              <p style={{ color: '#aaa' }}>{changeStatus.rollback.capability_reason}</p>
+              {Object.entries(changeStatus.rollback.artifacts || {}).map(([host, artifact]) => (
+                <div key={host} style={{ fontFamily: 'monospace', fontSize: '0.82rem', wordBreak: 'break-all' }}>
+                  {host}: {artifact.filename} · SHA-256 {artifact.sha256} · {artifact.size_bytes} bytes
+                </div>
+              ))}
+              {changeStatus.rollback.status === 'manual_restore_required' && (
+                <button onClick={prepareManualRestore} disabled={isPreparingManualRestore}
+                  style={{ marginTop: '12px', padding: '10px 18px', backgroundColor: '#e6a23c', color: 'black', border: 'none', fontWeight: 'bold' }}>
+                  {isPreparingManualRestore ? 'Capturing Pre-Rollback...' : 'Prepare Manual Restore'}
+                </button>
+              )}
+              {changeStatus.rollback.status === 'manual_restore_ready' && (
+                <>
+                  <p style={{ color: '#4caf50' }}>Fresh central Pre_Rollback capture completed. Perform the vendor-approved manual restore, then verify it here.</p>
+                  <button onClick={verifyManualRestore} disabled={isVerifyingManualRestore}
+                    style={{ padding: '10px 18px', backgroundColor: '#4caf50', color: 'white', border: 'none', fontWeight: 'bold' }}>
+                    {isVerifyingManualRestore ? 'Verifying Manual Restore...' : 'Verify Manual Restore'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {changeStatus.rollback?.status === 'manual_restore_verified' && (
+            <div style={{ marginTop: '18px', border: '2px solid #4caf50', padding: '15px' }}>
+              <strong style={{ color: '#4caf50' }}>Manual Restore Verified</strong>
+              <p>The Post_Rollback capture matches the integrity-bound Pre_Config artifact. This rollback objective is complete and cannot be reauthorized.</p>
             </div>
           )}
           {changeStatus.rollback?.status && changeStatus.rollback.status !== 'authorized' && (

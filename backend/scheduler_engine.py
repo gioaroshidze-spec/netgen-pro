@@ -83,16 +83,6 @@ def execute_scheduled_job(job_id: int, manual_run_by: str = None):
                             try: net_connect.enable()
                             except: pass
                         
-                        if job.job_payload.get('save_nvram') and device.os_type != 'mikrotik': 
-                            try: net_connect.save_config()
-                            except: pass
-                            
-                        if job.job_payload.get('save_flash'):
-                            if device.os_type == 'cisco':
-                                net_connect.send_command_timing("copy running-config flash:VNMS_Last_Good.cfg\n")
-                            elif device.os_type == 'mikrotik':
-                                net_connect.send_command("/export file=VNMS_Last_Good")
-                        
                         raw_config = net_connect.send_command(show_cmd)
                         clean_lines = [line for line in raw_config.splitlines() if not line.startswith("Building configuration") and not line.startswith("Current configuration")]
                         config = "\n".join(clean_lines)

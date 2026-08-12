@@ -27,9 +27,6 @@ export default function ScheduledJobs({ devices, userRole }) {
   const [schedRouters, setSchedRouters] = useState([]);
   const [isSchedSwitchesOpen, setIsSchedSwitchesOpen] = useState(false);
   const [isSchedRoutersOpen, setIsSchedRoutersOpen] = useState(false);
-
-  const [schedBackupNVRAM, setSchedBackupNVRAM] = useState(false);
-  const [schedBackupFlash, setSchedBackupFlash] = useState(false);
   const [schedSelectedTemplate, setSchedSelectedTemplate] = useState('');
 
   const fetchJobsAndTemplates = () => {
@@ -50,6 +47,7 @@ export default function ScheduledJobs({ devices, userRole }) {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchJobsAndTemplates();
   }, []);
 
@@ -79,7 +77,7 @@ export default function ScheduledJobs({ devices, userRole }) {
 
     let payload = {};
     if (schedType === 'backup') {
-      payload = { save_nvram: schedBackupNVRAM, save_flash: schedBackupFlash, save_archive: true };
+      payload = { save_nvram: false, save_flash: false, save_archive: true };
     } else {
       const template = templates.find(t => t.id.toString() === schedSelectedTemplate);
       payload = { template_id: template.id, template_config: template.payload };
@@ -117,14 +115,14 @@ export default function ScheduledJobs({ devices, userRole }) {
   const handleToggleJob = (id) => {
     fetch(`${JOBS_URL}${id}/toggle`, { method: 'PUT', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
       .then(() => fetchJobsAndTemplates())
-      .catch(err => alert("Failed to toggle job. Ensure you have permissions."));
+      .catch(() => alert("Failed to toggle job. Ensure you have permissions."));
   };
 
   const handleDeleteJob = (id) => {
     if (!window.confirm("Are you sure you want to delete this scheduled job?")) return;
     fetch(`${JOBS_URL}${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } })
       .then(() => fetchJobsAndTemplates())
-      .catch(err => alert("Failed to delete job. Ensure you have permissions."));
+      .catch(() => alert("Failed to delete job. Ensure you have permissions."));
   };
 
   const handleRunNow = (id) => {
@@ -169,12 +167,6 @@ export default function ScheduledJobs({ devices, userRole }) {
               <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', cursor: 'not-allowed', fontSize: '0.85rem', color: '#555' }} title="Background jobs cannot download to browser">
                   <input type="checkbox" disabled checked={true} style={{ marginRight: '8px' }} /> Save to Server Archive
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', cursor: userRole !== 'admin' ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: userRole !== 'admin' ? '#555' : '#ccc' }}>
-                  <input type="checkbox" disabled={userRole !== 'admin'} checked={schedBackupNVRAM} onChange={(e) => setSchedBackupNVRAM(e.target.checked)} style={{ marginRight: '8px' }} /> Save to NVRAM
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', cursor: userRole !== 'admin' ? 'not-allowed' : 'pointer', fontSize: '0.85rem', color: userRole !== 'admin' ? '#555' : '#ccc' }}>
-                  <input type="checkbox" disabled={userRole !== 'admin'} checked={schedBackupFlash} onChange={(e) => setSchedBackupFlash(e.target.checked)} style={{ marginRight: '8px' }} /> Save to Local Flash
                 </label>
               </div>
             ) : (

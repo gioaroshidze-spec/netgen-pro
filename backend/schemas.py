@@ -107,8 +107,8 @@ class SwitchConfigRequest(BaseModel):
 
 # --- BACKUP REQUESTS ---
 class BackupOptions(BaseModel):
-    save_nvram: bool
-    save_flash: bool
+    save_nvram: bool = False
+    save_flash: bool = False
     download_local: bool
     save_archive: bool
     prefix: Optional[str] = ""
@@ -151,6 +151,11 @@ class RollbackAuthorizationRequest(BaseModel):
 
 
 class RollbackExecutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rollback_id: str
+
+
+class ManualRestoreActionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     rollback_id: str
 

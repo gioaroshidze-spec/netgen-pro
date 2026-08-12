@@ -1,11 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 from database import get_db
 import models, schemas
 from routers.auth import get_current_user
-from scheduler_engine import sync_jobs_to_scheduler
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from scheduler_engine import sync_jobs_to_scheduler, execute_scheduled_job
 
 router = APIRouter(tags=["Scheduled Jobs"])
@@ -17,18 +15,21 @@ def get_jobs(db: Session = Depends(get_db), current_user: models.User = Depends(
 
 @router.post("/jobs/", response_model=schemas.ScheduledJobResponse)
 def create_job(job: schemas.ScheduledJobCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    """Creates a new job, enforcing strict RBAC rules for Viewers."""
-    
+    """Creates a new job while keeping backups controller/archive-only."""
+
+    if job.job_type == "backup" and (
+        job.job_payload.get("save_nvram") or job.job_payload.get("save_flash")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Scheduled backups are read-only; save_nvram and save_flash are unsupported.",
+        )
+
     if current_user.role != "admin":
         # 1. Viewers cannot schedule templates
         if job.job_type != "backup":
             raise HTTPException(status_code=403, detail="Viewers can only schedule backup jobs.")
         
-        # 2. Viewers cannot schedule NVRAM or Flash saves
-        payload = job.job_payload
-        if payload.get("save_nvram") or payload.get("save_flash"):
-            raise HTTPException(status_code=403, detail="Viewers cannot schedule backups to NVRAM or Flash.")
-
     new_job = models.ScheduledJob(**job.model_dump(), created_by=current_user.username)
     db.add(new_job)
     db.commit()

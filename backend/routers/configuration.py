@@ -20,12 +20,19 @@ from backup_service import create_preconfiguration_backups
 from change_control import proposal_hash
 from verification_service import run_verification, VerificationConflict
 from rollback_service import (
+    ACTIVE_ROLLBACK_STATES,
     ELIGIBLE_CHANGE_STATES,
     RollbackRejected,
     authorize_rollback,
     execute_rollback,
+    manual_restore_handoff,
     persist_backup_artifacts,
+    prepare_manual_restore,
+    rollback_lifecycle_blocker,
+    sanitize_backup_results,
+    verify_manual_restore,
 )
+from device_capabilities import AUTOMATED_RESTORE_UNQUALIFIED_REASON
 
 router = APIRouter(tags=["Configuration Engine"])
 
@@ -450,6 +457,17 @@ def get_change_status(
             models.ConfigurationBackupArtifact.artifact_type == "pre_config",
         ).all()
     }
+    pre_config_artifacts = db.query(models.ConfigurationBackupArtifact).filter(
+        models.ConfigurationBackupArtifact.change_id == change_id,
+        models.ConfigurationBackupArtifact.artifact_type == "pre_config",
+    ).all()
+    lifecycle_blocker = rollback_lifecycle_blocker(db, change)
+    if change.status not in ELIGIBLE_CHANGE_STATES:
+        eligibility_reason = "Change is not currently rollback-eligible."
+    elif integrity_bound_hosts != set(change.target_devices):
+        eligibility_reason = "Integrity-bound Pre_Config artifacts are incomplete."
+    else:
+        eligibility_reason = lifecycle_blocker
     return {
         "change_id": change.change_id, "status": change.status,
         "targets": change.target_devices,
@@ -464,17 +482,36 @@ def get_change_status(
             "exec_actions_state_verified": False,
         },
         "rollback": {
-            "eligible": (
-                change.status in ELIGIBLE_CHANGE_STATES
-                and integrity_bound_hosts == set(change.target_devices)
-                and latest_rollback is None
+            "eligible": eligibility_reason is None,
+            "eligibility_reason": eligibility_reason,
+            "authorized": bool(
+                latest_rollback
+                and latest_rollback.status in ACTIVE_ROLLBACK_STATES
             ),
-            "authorized": bool(latest_rollback and latest_rollback.status == "authorized"),
-            "rollback_id": latest_rollback.rollback_id if latest_rollback and latest_rollback.status == "authorized" else None,
+            "rollback_id": latest_rollback.rollback_id if latest_rollback else None,
             "status": latest_rollback.status if latest_rollback else None,
-            "per_device_results": latest_rollback.per_device_results if latest_rollback else {},
+            "automated_restore": False,
+            "capability_reason": AUTOMATED_RESTORE_UNQUALIFIED_REASON,
+            "artifacts": {
+                artifact.hostname: {
+                    "filename": artifact.filename,
+                    "sha256": artifact.sha256,
+                    "size_bytes": artifact.size_bytes,
+                }
+                for artifact in pre_config_artifacts
+            },
+            "device_contact_performed": (
+                False if latest_rollback and latest_rollback.status == "manual_restore_required"
+                else None
+            ),
+            "per_device_results": sanitize_backup_results(
+                latest_rollback.per_device_results if latest_rollback else {}
+            ),
             "verification_results": latest_rollback.verification_results if latest_rollback else {},
-            "error": latest_rollback.error if latest_rollback else None,
+            "error": (
+                "Manual restore operation failed."
+                if latest_rollback and latest_rollback.error else None
+            ),
         },
     }
 
@@ -529,8 +566,8 @@ def authorize_change_rollback(
                   details={"action": "Rollback Authorization Rejected", "change_id": change.change_id,
                            "proposal_hash": change.proposal_hash, "reason": str(exc)})
         raise HTTPException(status_code=409, detail=str(exc))
-    return {"change_id": change.change_id, "rollback_id": rollback.rollback_id,
-            "status": rollback.status, "message": "Rollback Authorized"}
+    return {**manual_restore_handoff(db, change, rollback),
+            "status": rollback.status, "message": "Manual Restore Required"}
 
 
 @router.post("/configuration/changes/{change_id}/rollback")
@@ -559,3 +596,90 @@ def rollback_change(
     return {"change_id": change.change_id, "rollback_id": rollback.rollback_id,
             "status": rollback.status, "per_device_results": rollback.per_device_results,
             "verification_results": rollback.verification_results, "error": rollback.error}
+
+
+def _get_rollback_or_404(db, change, rollback_id):
+    rollback = db.query(models.ConfigurationRollback).filter(
+        models.ConfigurationRollback.rollback_id == rollback_id
+    ).first()
+    if not rollback:
+        raise HTTPException(status_code=404, detail="Rollback authorization not found.")
+    if rollback.change_id != change.change_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Rollback authorization does not belong to this change.",
+        )
+    return rollback
+
+
+@router.post("/configuration/changes/{change_id}/prepare-manual-restore")
+def prepare_change_manual_restore(
+    change_id: str, request: schemas.ManualRestoreActionRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    rollback = _get_rollback_or_404(db, change, request.rollback_id)
+    try:
+        rollback = prepare_manual_restore(
+            db, change, rollback, current_user.username, audit_logger=log_event
+        )
+    except RollbackRejected as exc:
+        log_event(
+            db=db, event_type="Configuration", severity="ERROR",
+            author=current_user.username, target_devices=change.target_devices,
+            details={
+                "action": "Prepare Manual Restore Rejected",
+                "change_id": change.change_id,
+                "rollback_id": request.rollback_id,
+                "reason": str(exc),
+                "device_contact_performed": False,
+            },
+        )
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        **manual_restore_handoff(
+            db, change, rollback, device_contact_performed=True
+        ),
+        "status": rollback.status,
+        "pre_rollback_files": rollback.pre_rollback_files or {},
+        "message": (
+            "Manual restore is ready for the vendor-approved procedure."
+            if rollback.status == "manual_restore_ready"
+            else "Manual restore preparation failed; create a new rollback authorization."
+        ),
+    }
+
+
+@router.post("/configuration/changes/{change_id}/verify-manual-restore")
+def verify_change_manual_restore(
+    change_id: str, request: schemas.ManualRestoreActionRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    rollback = _get_rollback_or_404(db, change, request.rollback_id)
+    try:
+        rollback = verify_manual_restore(
+            db, change, rollback, current_user.username, audit_logger=log_event
+        )
+    except RollbackRejected as exc:
+        log_event(
+            db=db, event_type="Configuration", severity="ERROR",
+            author=current_user.username, target_devices=change.target_devices,
+            details={
+                "action": "Verify Manual Restore Rejected",
+                "change_id": change.change_id,
+                "rollback_id": request.rollback_id,
+                "reason": str(exc),
+                "device_contact_performed": False,
+            },
+        )
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "change_id": change.change_id,
+        "rollback_id": rollback.rollback_id,
+        "status": rollback.status,
+        "verification_results": rollback.verification_results,
+        "error": rollback.error,
+    }
