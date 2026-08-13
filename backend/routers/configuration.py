@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database import get_db
@@ -23,9 +23,12 @@ from rollback_service import (
     ACTIVE_ROLLBACK_STATES,
     ELIGIBLE_CHANGE_STATES,
     RollbackRejected,
+    active_manual_restore_locks,
     authorize_rollback,
+    cancel_manual_restore,
     execute_rollback,
     manual_restore_handoff,
+    overlapping_active_rollback,
     persist_backup_artifacts,
     prepare_manual_restore,
     rollback_lifecycle_blocker,
@@ -335,6 +338,41 @@ def push_configuration(request: schemas.PushConfigRequest, db: Session = Depends
     if change.status not in ("simulation_passed", "admin_override_authorized"):
         raise HTTPException(status_code=409, detail=f"Configuration change is not deployable from state '{change.status}'.")
 
+    conflict = overlapping_active_rollback(db, change.target_devices)
+    if conflict:
+        active_rollback, overlapping_hostnames = conflict
+        reason = (
+            f"Active manual restore {active_rollback.rollback_id} blocks production "
+            f"Push for overlapping target device(s): {', '.join(overlapping_hostnames)}."
+        )
+        log_event(
+            db=db,
+            event_type="Configuration",
+            severity="WARNING",
+            author=current_user.username,
+            target_devices=overlapping_hostnames,
+            details={
+                "action": "Production Push Rejected - Active Manual Restore",
+                "change_id": change.change_id,
+                "rollback_id": active_rollback.rollback_id,
+                "overlapping_hostnames": overlapping_hostnames,
+                "reason": reason,
+                "device_contact_performed": False,
+                "device_configuration_changed": False,
+            },
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "active_manual_restore",
+                "message": reason,
+                "owner_change_id": active_rollback.change_id,
+                "rollback_id": active_rollback.rollback_id,
+                "overlapping_hostnames": overlapping_hostnames,
+                "state": active_rollback.status,
+            },
+        )
+
     devices = db.query(models.NetworkDevice).filter(models.NetworkDevice.hostname.in_(change.target_devices)).all()
     if len(devices) != len(change.target_devices) or {d.hostname for d in devices} != set(change.target_devices):
         raise HTTPException(status_code=409, detail="One or more stored target devices no longer exist.")
@@ -428,6 +466,15 @@ def authorize_simulation_override(
                        "simulation_state": "failed"}, target_devices=change.target_devices)
     return {"change_id": change.change_id, "status": "admin_override_authorized",
             "message": "Admin Override Authorized — Production Push Available"}
+
+
+@router.get("/configuration/active-manual-restores")
+def get_active_manual_restores(
+    target: list[str] = Query(default=[]),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    return active_manual_restore_locks(db, target)
 
 
 def _get_change_or_404(db, change_id):
@@ -610,6 +657,36 @@ def _get_rollback_or_404(db, change, rollback_id):
             detail="Rollback authorization does not belong to this change.",
         )
     return rollback
+
+
+@router.post("/configuration/changes/{change_id}/cancel-manual-restore")
+def cancel_change_manual_restore(
+    change_id: str,
+    request: schemas.ManualRestoreCancellationRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_admin),
+):
+    change = _get_change_or_404(db, change_id)
+    rollback = _get_rollback_or_404(db, change, request.rollback_id)
+    reason = request.reason.strip()
+    if not 10 <= len(reason) <= 1000:
+        raise HTTPException(
+            status_code=422,
+            detail="Cancellation reason must be between 10 and 1000 characters.",
+        )
+    try:
+        rollback = cancel_manual_restore(
+            db, change, rollback, current_user.username, reason, audit_logger=log_event
+        )
+    except RollbackRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "change_id": change.change_id,
+        "rollback_id": rollback.rollback_id,
+        "status": rollback.status,
+        "device_contact_performed": False,
+        "device_configuration_changed": False,
+    }
 
 
 @router.post("/configuration/changes/{change_id}/prepare-manual-restore")

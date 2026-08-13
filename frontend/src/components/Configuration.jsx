@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 // --- DYNAMIC API ROUTING ---
 const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
@@ -34,14 +34,45 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   const [isAuthorizingRollback, setIsAuthorizingRollback] = useState(false);
   const [isPreparingManualRestore, setIsPreparingManualRestore] = useState(false);
   const [isVerifyingManualRestore, setIsVerifyingManualRestore] = useState(false);
+  const [activeManualRestoreLocks, setActiveManualRestoreLocks] = useState([]);
+  const [lockCancellationReasons, setLockCancellationReasons] = useState({});
+  const [cancellingRollbackId, setCancellingRollbackId] = useState(null);
   const changeIdRef = useRef(null);
   const terminalEndRef = useRef(null); 
+
+  const refreshActiveManualRestoreLocks = useCallback(async () => {
+    if (userRole !== 'admin') {
+      setActiveManualRestoreLocks([]);
+      return [];
+    }
+    const targets = [...selectedSwitches, ...selectedRouters];
+    if (targets.length === 0) {
+      setActiveManualRestoreLocks([]);
+      return [];
+    }
+    const params = new URLSearchParams();
+    targets.forEach(target => params.append('target', target));
+    const response = await fetch(
+      API_BASE + '/configuration/active-manual-restores?' + params.toString(),
+      { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } }
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not refresh active manual restore locks.');
+    setActiveManualRestoreLocks(data);
+    return data;
+  }, [selectedSwitches, selectedRouters, userRole]);
 
   useEffect(() => {
     if (terminalEndRef.current) {
       terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [terminalLogs]);
+
+  useEffect(() => {
+    refreshActiveManualRestoreLocks().catch(err => {
+      setTerminalLogs(prev => [...prev, '[ERROR]: ' + err.message]);
+    });
+  }, [refreshActiveManualRestoreLocks]);
 
   // Load the template payload into the editor if a template is loaded
   useEffect(() => {
@@ -107,8 +138,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       if (!response.ok) throw new Error(data.detail || 'Rollback authorization failed.');
       setRollbackReason('');
       await refreshChangeStatus(changeId);
+      await refreshActiveManualRestoreLocks();
     } catch (err) {
-      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+      setTerminalLogs(prev => [...prev, '[ERROR]: ' + err.message]);
     } finally { setIsAuthorizingRollback(false); }
   };
 
@@ -125,9 +157,11 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Manual restore preparation failed.');
       await refreshChangeStatus(changeId);
+      await refreshActiveManualRestoreLocks();
     } catch (err) {
-      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+      setTerminalLogs(prev => [...prev, '[ERROR]: ' + err.message]);
       await refreshChangeStatus(changeId).catch(() => {});
+      await refreshActiveManualRestoreLocks().catch(() => {});
     } finally { setIsPreparingManualRestore(false); }
   };
 
@@ -144,10 +178,44 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Manual restore verification failed.');
       await refreshChangeStatus(changeId);
+      await refreshActiveManualRestoreLocks();
     } catch (err) {
-      setTerminalLogs(prev => [...prev, `[ERROR]: ${err.message}`]);
+      setTerminalLogs(prev => [...prev, '[ERROR]: ' + err.message]);
       await refreshChangeStatus(changeId).catch(() => {});
+      await refreshActiveManualRestoreLocks().catch(() => {});
     } finally { setIsVerifyingManualRestore(false); }
+  };
+
+  const cancelManualRestore = async (lock) => {
+    const reason = (lockCancellationReasons[lock.rollback_id] || '').trim();
+    if (!lock.cancellable || reason.length < 10) return;
+    if (lock.state === 'manual_restore_ready') {
+      const confirmed = window.confirm(
+        'Cancel only after confirming that no engineer is currently performing the vendor-approved manual restore. Continue?'
+      );
+      if (!confirmed) return;
+    }
+    setCancellingRollbackId(lock.rollback_id);
+    try {
+      const response = await fetch(
+        API_BASE + '/configuration/changes/' + lock.owner_change_id + '/cancel-manual-restore',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+          body: JSON.stringify({ rollback_id: lock.rollback_id, reason })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Manual restore cancellation failed.');
+      setLockCancellationReasons(prev => ({ ...prev, [lock.rollback_id]: '' }));
+      await refreshActiveManualRestoreLocks();
+      if (changeId === lock.owner_change_id) await refreshChangeStatus(changeId);
+    } catch (err) {
+      setTerminalLogs(prev => [...prev, '[ERROR]: ' + err.message]);
+      await refreshActiveManualRestoreLocks().catch(() => {});
+    } finally {
+      setCancellingRollbackId(null);
+    }
   };
 
   const handleGenerateConfig = () => {
@@ -295,7 +363,14 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
         if (response.status === 403) {
           throw new Error(errData.detail || "Administrator privileges required for production deployment.");
         }
-        throw new Error(errData.detail || "Execution failed to start.");
+        if (response.status === 409 && errData.detail?.code === 'active_manual_restore') {
+          await refreshActiveManualRestoreLocks();
+          throw new Error(errData.detail.message);
+        }
+        const detailMessage = typeof errData.detail === 'string'
+          ? errData.detail
+          : errData.detail?.message;
+        throw new Error(detailMessage || "Execution failed to start.");
       }
 
       const reader = response.body.getReader();
@@ -354,6 +429,11 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
   const canUseTemplateWorkflow = userRole === 'admin' || (userRole === 'viewer' && loadedTemplate !== null);
   const canSimulate = canUseTemplateWorkflow;
   const canPush = userRole === 'admin';
+  const isPushLocked = activeManualRestoreLocks.length > 0;
+  const pushLockMessage = isPushLocked
+    ? 'Production Push blocked by active manual restore ' + activeManualRestoreLocks[0].rollback_id
+      + ' on ' + activeManualRestoreLocks[0].overlapping_hostnames.join(', ') + '.'
+    : '';
 
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
@@ -372,6 +452,40 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
       )}
 
       <h2>AI Configuration Engine</h2>
+
+      {canPush && activeManualRestoreLocks.map(lock => (
+        <div key={lock.rollback_id} style={{ backgroundColor: '#3a1f1f', padding: '20px', borderRadius: '8px', border: '2px solid #d32f2f', marginBottom: '20px' }}>
+          <h3 style={{ color: '#ff6b6b', marginTop: 0 }}>ACTIVE MANUAL RESTORE LOCK</h3>
+          <p><strong>Device(s):</strong> {lock.overlapping_hostnames.join(', ')}</p>
+          <p><strong>State:</strong> {lock.state}</p>
+          <p><strong>Owning Change:</strong> {lock.owner_change_id}</p>
+          <p><strong>Rollback ID:</strong> {lock.rollback_id}</p>
+          <p style={{ color: '#ffb3b3' }}>Production Push is blocked while this lock is active. Simulation remains available.</p>
+          {lock.cancellable ? (
+            <div>
+              {lock.state === 'manual_restore_ready' && (
+                <p style={{ color: '#ff6b6b' }}>Cancel only after confirming that no engineer is currently performing the vendor-approved manual restore.</p>
+              )}
+              <textarea
+                value={lockCancellationReasons[lock.rollback_id] || ''}
+                onChange={event => setLockCancellationReasons(prev => ({ ...prev, [lock.rollback_id]: event.target.value }))}
+                maxLength={1000}
+                placeholder="Required cancellation reason (10–1000 characters)"
+                style={{ width: '100%', minHeight: '80px', backgroundColor: '#1e1e1e', color: 'white', border: '1px solid #d32f2f', padding: '10px' }}
+              />
+              <button
+                onClick={() => cancelManualRestore(lock)}
+                disabled={cancellingRollbackId === lock.rollback_id || (lockCancellationReasons[lock.rollback_id] || '').trim().length < 10}
+                style={{ marginTop: '10px', padding: '10px 18px', backgroundColor: '#d32f2f', color: 'white', border: 'none', fontWeight: 'bold' }}
+              >
+                {cancellingRollbackId === lock.rollback_id ? 'Cancelling...' : 'Cancel Manual Restore'}
+              </button>
+            </div>
+          ) : (
+            <p>This restore is currently busy; cancellation is unavailable until it reaches a stable waiting state.</p>
+          )}
+        </div>
+      ))}
       
       {/* 1. PROMPT BOX */}
       <div style={{ backgroundColor: '#252526', padding: '20px', borderRadius: '8px', border: '1px solid #333', marginBottom: '20px' }}>
@@ -452,13 +566,17 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
           {canPush && (
             <button 
               onClick={() => executeConfig('push')} 
-              disabled={isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId}
-              style={{ padding: '10px 20px', backgroundColor: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#555' : '#d32f2f', color: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
+              title={pushLockMessage}
+              disabled={isBusy || isPushLocked || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId}
+              style={{ padding: '10px 20px', backgroundColor: (isBusy || isPushLocked || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#555' : '#d32f2f', color: (isBusy || isPushLocked || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? '#888' : 'white', border: 'none', borderRadius: '4px', cursor: (isBusy || isPushLocked || !['passed', 'override_authorized'].includes(simulationStatus) || !changeId) ? 'not-allowed' : 'pointer', fontWeight: 'bold' }}
             >
               {isPushing ? 'Deploying...' : '🚀 Push to Production'}
             </button>
           )}
         </div>
+        {canPush && isPushLocked && (
+          <div style={{ marginTop: '12px', color: '#ff6b6b' }}>{pushLockMessage}</div>
+        )}
         {canPush && simulationStatus === 'failed' && changeId && (
           <div style={{ marginTop: '15px', padding: '15px', border: '1px solid #d32f2f', borderRadius: '4px', backgroundColor: '#d32f2f15' }}>
             <strong style={{ color: '#ff6b6b' }}>Simulation failed — production is blocked by default.</strong>
@@ -503,6 +621,9 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
               {RETRYABLE_MANUAL_RESTORE_STATES.has(changeStatus.rollback.status) && (
                 <p style={{ color: '#ff6b6b' }}>The prior manual restore attempt ended in a terminal failure. A new rollback authorization and reason are required; the old rollback ID cannot be reused.</p>
               )}
+              {changeStatus.rollback.status === 'manual_restore_cancelled' && (
+                <p>The prior manual restore was cancelled. A new authorization and rollback ID are required.</p>
+              )}
               <p style={{ color: '#e6a23c' }}>Full restore can interrupt management connectivity. VNMS history cannot detect every out-of-band/manual change.</p>
               <textarea value={rollbackReason} onChange={e => setRollbackReason(e.target.value)} maxLength={1000}
                 placeholder="Required rollback reason (10–1000 characters)"
@@ -538,6 +659,12 @@ export default function Configuration({ selectedSwitches, selectedRouters, loade
                   </button>
                 </>
               )}
+            </div>
+          )}
+          {changeStatus.rollback?.status === 'manual_restore_cancelled' && (
+            <div style={{ marginTop: '18px', border: '2px solid #777', padding: '15px' }}>
+              <strong>Manual Restore Cancelled</strong>
+              <p>This rollback ID is permanently unusable. Any later rollback requires a new authorization.</p>
             </div>
           )}
           {changeStatus.rollback?.status === 'manual_restore_verified' && (

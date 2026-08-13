@@ -16,6 +16,7 @@ from database import Base, get_db
 from rollback_service import (
     RollbackRejected,
     authorize_rollback,
+    cancel_manual_restore,
     execute_rollback,
     prepare_manual_restore,
     verify_manual_restore,
@@ -630,3 +631,435 @@ def test_phase3_endpoints_enforce_rbac_and_strict_bodies(db, tmp_path, monkeypat
         assert status.json()["rollback"]["automated_restore"] is False
         assert "config_payload" not in status.json()
         assert "encrypted_password" not in status.text
+
+
+
+def add_active_rollback(db, change, status):
+    rollback = models.ConfigurationRollback(
+        rollback_id=f"rollback-{status}",
+        change_id=change.change_id,
+        requested_by="admin",
+        reason="Manual restore concurrency test.",
+        authorized_at=datetime.now(timezone.utc),
+        status=status,
+        per_device_results={},
+        verification_results={},
+    )
+    db.add(rollback)
+    db.commit()
+    return rollback
+
+
+def configuration_test_app(db, role="admin"):
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.dependency_overrides[get_db] = lambda: db
+    app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+        username=role, role=role
+    )
+    return app
+
+
+@pytest.mark.parametrize("active_state", sorted(rollback_service.ACTIVE_ROLLBACK_STATES))
+def test_active_manual_restore_states_block_overlapping_production_push_before_io(
+    db, monkeypatch, active_state,
+):
+    add_device(db, "sw1")
+    add_device(db, "sw2")
+    locked_change = add_change(db, ("sw1", "sw2"))
+    rollback = add_active_rollback(db, locked_change, active_state)
+    push_change = add_change(db, ("sw1",), status="simulation_passed")
+    side_effects = []
+    events = []
+    monkeypatch.setattr(
+        configuration, "create_preconfiguration_backups",
+        lambda *args, **kwargs: side_effects.append("backup"),
+    )
+    monkeypatch.setattr(
+        configuration, "run_ansible_playbook",
+        lambda *args, **kwargs: side_effects.append("ansible"),
+    )
+    monkeypatch.setattr(
+        configuration, "log_event", lambda **kwargs: events.append(kwargs)
+    )
+
+    app = configuration_test_app(db)
+    with TestClient(app) as client:
+        response = client.post(
+            "/configuration/push",
+            json={"change_id": push_change.change_id},
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail == {
+        "code": "active_manual_restore",
+        "message": (
+            f"Active manual restore {rollback.rollback_id} blocks production "
+            "Push for overlapping target device(s): sw1."
+        ),
+        "owner_change_id": locked_change.change_id,
+        "rollback_id": rollback.rollback_id,
+        "overlapping_hostnames": ["sw1"],
+        "state": active_state,
+    }
+    assert side_effects == []
+    db.refresh(push_change)
+    assert push_change.status == "simulation_passed"
+    assert len(events) == 1
+    event = events[0]
+    assert event["target_devices"] == ["sw1"]
+    assert event["details"]["rollback_id"] == rollback.rollback_id
+    assert event["details"]["overlapping_hostnames"] == ["sw1"]
+    assert event["details"]["device_contact_performed"] is False
+    assert event["details"]["device_configuration_changed"] is False
+
+
+def test_nonoverlapping_production_push_remains_allowed(db, monkeypatch):
+    add_device(db, "sw1")
+    add_device(db, "sw2")
+    locked_change = add_change(db, ("sw1",))
+    add_active_rollback(db, locked_change, "manual_restore_ready")
+    push_change = add_change(db, ("sw2",), status="simulation_passed")
+    calls = []
+
+    def backups(devices):
+        calls.append(("backup", [device.hostname for device in devices]))
+        return (
+            {"sw2": "Pre_Config_cisco_switch_sw2_20260813_120000.txt"},
+            [{
+                "hostname": "sw2",
+                "success": True,
+                "filename": "Pre_Config_cisco_switch_sw2_20260813_120000.txt",
+                "sha256": "a" * 64,
+                "size_bytes": 1,
+            }],
+        )
+
+    def ansible(payload, devices, **kwargs):
+        calls.append(("ansible", [device.hostname for device in devices], kwargs))
+        return iter([recap(devices[0].hostname)])
+
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", backups)
+    monkeypatch.setattr(configuration, "run_ansible_playbook", ansible)
+    monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
+    app = configuration_test_app(db)
+    with TestClient(app) as client:
+        response = client.post(
+            "/configuration/push",
+            json={"change_id": push_change.change_id},
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert response.status_code == 200
+    assert calls[0] == ("backup", ["sw2"])
+    assert calls[1][0:2] == ("ansible", ["sw2"])
+
+
+
+@pytest.mark.parametrize(
+    "stable_state", ["manual_restore_required", "manual_restore_ready"]
+)
+def test_cancellation_stable_states_are_device_free_audited_and_reauthorizable(
+    db, tmp_path, monkeypatch, stable_state,
+):
+    add_device(db)
+    change = add_change(db)
+    bind_artifact(db, tmp_path, change)
+    rollback = authorize_rollback(
+        db, change, "admin", "Authorize cancellation lifecycle test.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    rollback.status = stable_state
+    db.commit()
+    device_calls = []
+    events = []
+    monkeypatch.setattr(
+        rollback_service, "create_prerollback_backups",
+        lambda *args, **kwargs: device_calls.append("pre_rollback"),
+    )
+    monkeypatch.setattr(
+        rollback_service, "create_postrollback_backups",
+        lambda *args, **kwargs: device_calls.append("post_rollback"),
+    )
+
+    result = cancel_manual_restore(
+        db, change, rollback, "admin", "Abandon this manual restore safely.",
+        audit_logger=lambda **kwargs: events.append(kwargs),
+    )
+
+    assert result.status == "manual_restore_cancelled"
+    assert result.completed_at is not None
+    assert device_calls == []
+    details = events[0]["details"]
+    assert details["change_id"] == change.change_id
+    assert details["rollback_id"] == rollback.rollback_id
+    assert details["actor"] == "admin"
+    assert details["reason"] == "Abandon this manual restore safely."
+    assert details["previous_state"] == stable_state
+    assert details["state_transition"] == (
+        f"{stable_state} -> manual_restore_cancelled"
+    )
+    assert details["target_devices"] == ["sw1"]
+    assert details["device_contact_performed"] is False
+    assert details["device_configuration_changed"] is False
+    status = configuration.get_change_status(
+        change.change_id, db, SimpleNamespace(username="admin", role="admin")
+    )
+    assert status["rollback"]["eligible"] is True
+    assert status["rollback"]["authorized"] is False
+    new_rollback = authorize_rollback(
+        db, change, "admin", "Authorize a new manual restore attempt.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    assert new_rollback.rollback_id != rollback.rollback_id
+
+
+@pytest.mark.parametrize(
+    "busy_state", ["capturing_pre_rollback", "verifying_manual_restore"]
+)
+def test_cancellation_rejects_busy_manual_restore_states(db, tmp_path, busy_state):
+    add_device(db)
+    change = add_change(db)
+    bind_artifact(db, tmp_path, change)
+    rollback = authorize_rollback(
+        db, change, "admin", "Authorize busy state cancellation test.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    rollback.status = busy_state
+    db.commit()
+    with pytest.raises(RollbackRejected, match="valid only"):
+        cancel_manual_restore(
+            db, change, rollback, "admin", "Do not cancel during device capture.",
+            audit_logger=lambda **kwargs: None,
+        )
+    db.refresh(rollback)
+    assert rollback.status == busy_state
+
+
+def test_cancelled_rollback_id_is_terminal_and_cannot_be_reused(db, tmp_path):
+    add_device(db)
+    change = add_change(db)
+    bind_artifact(db, tmp_path, change)
+    rollback = authorize_rollback(
+        db, change, "admin", "Authorize terminal cancellation test.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    cancel_manual_restore(
+        db, change, rollback, "admin", "Cancel this rollback permanently.",
+        audit_logger=lambda **kwargs: None,
+    )
+    with pytest.raises(RollbackRejected, match="single-use"):
+        prepare_manual_restore(
+            db, change, rollback, "admin", tmp_path,
+            backup_runner=lambda *args, **kwargs: pytest.fail("must not capture"),
+            audit_logger=lambda **kwargs: None,
+        )
+    with pytest.raises(RollbackRejected, match="only once"):
+        verify_manual_restore(
+            db, change, rollback, "admin", tmp_path,
+            post_backup_runner=lambda *args, **kwargs: pytest.fail("must not capture"),
+            audit_logger=lambda **kwargs: None,
+        )
+    with pytest.raises(RollbackRejected, match="unsupported"):
+        execute_rollback(
+            db, change, rollback, "admin", tmp_path,
+            audit_logger=lambda **kwargs: None,
+        )
+    with pytest.raises(RollbackRejected, match="valid only"):
+        cancel_manual_restore(
+            db, change, rollback, "admin", "Cannot reuse cancellation action.",
+            audit_logger=lambda **kwargs: None,
+        )
+
+
+def test_cancel_endpoint_enforces_auth_binding_reason_and_strict_body(
+    db, tmp_path, monkeypatch,
+):
+    add_device(db)
+    first = add_change(db)
+    bind_artifact(db, tmp_path, first)
+    rollback = authorize_rollback(
+        db, first, "admin", "Authorize endpoint validation test.", tmp_path,
+        audit_logger=lambda **kwargs: None,
+    )
+    second = add_change(db)
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.dependency_overrides[get_db] = lambda: db
+    monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
+    endpoint = f"/configuration/changes/{first.change_id}/cancel-manual-restore"
+    headers = {"Authorization": "Bearer x"}
+    valid = {
+        "rollback_id": rollback.rollback_id,
+        "reason": "Cancel with a valid operational reason.",
+    }
+
+    with TestClient(app) as client:
+        assert client.post(endpoint, json=valid).status_code == 401
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="viewer", role="viewer"
+        )
+        assert client.post(endpoint, json=valid, headers=headers).status_code == 403
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="admin", role="admin"
+        )
+        assert client.post(
+            endpoint,
+            json={"rollback_id": rollback.rollback_id, "reason": "short"},
+            headers=headers,
+        ).status_code == 422
+        assert client.post(
+            endpoint,
+            json={"rollback_id": rollback.rollback_id, "reason": "x" * 1001},
+            headers=headers,
+        ).status_code == 422
+        assert client.post(
+            endpoint, json={**valid, "unexpected": True}, headers=headers
+        ).status_code == 422
+        mismatch = client.post(
+            f"/configuration/changes/{second.change_id}/cancel-manual-restore",
+            json=valid, headers=headers,
+        )
+        assert mismatch.status_code == 409
+        assert "does not belong" in mismatch.json()["detail"]
+
+
+def test_production_push_becomes_eligible_after_cancellation(db, monkeypatch):
+    add_device(db)
+    locked_change = add_change(db)
+    rollback = add_active_rollback(
+        db, locked_change, "manual_restore_required"
+    )
+    push_change = add_change(db, status="simulation_passed")
+    calls = []
+
+    def backups(devices):
+        calls.append("backup")
+        return (
+            {"sw1": "Pre_Config_cisco_switch_sw1_20260813_120000.txt"},
+            [{
+                "hostname": "sw1",
+                "success": True,
+                "filename": "Pre_Config_cisco_switch_sw1_20260813_120000.txt",
+                "sha256": "b" * 64,
+                "size_bytes": 1,
+            }],
+        )
+
+    monkeypatch.setattr(configuration, "create_preconfiguration_backups", backups)
+    monkeypatch.setattr(
+        configuration, "run_ansible_playbook",
+        lambda payload, devices, **kwargs: iter([recap("sw1")]),
+    )
+    monkeypatch.setattr(configuration, "log_event", lambda **kwargs: None)
+    app = configuration_test_app(db)
+    headers = {"Authorization": "Bearer x"}
+    with TestClient(app) as client:
+        blocked = client.post(
+            "/configuration/push",
+            json={"change_id": push_change.change_id}, headers=headers,
+        )
+        assert blocked.status_code == 409
+        cancelled = client.post(
+            f"/configuration/changes/{locked_change.change_id}/cancel-manual-restore",
+            json={
+                "rollback_id": rollback.rollback_id,
+                "reason": "Release this target for a new production push.",
+            },
+            headers=headers,
+        )
+        assert cancelled.status_code == 200
+        allowed = client.post(
+            "/configuration/push",
+            json={"change_id": push_change.change_id}, headers=headers,
+        )
+    assert allowed.status_code == 200
+    assert calls == ["backup"]
+
+
+
+def test_active_manual_restores_endpoint_returns_safe_metadata_without_device_io(
+    db, monkeypatch,
+):
+    add_device(db, "sw1")
+    add_device(db, "sw2")
+    change = add_change(db, ("sw1", "sw2"))
+    rollback = add_active_rollback(db, change, "manual_restore_ready")
+    device_calls = []
+    monkeypatch.setattr(
+        configuration, "create_preconfiguration_backups",
+        lambda *args, **kwargs: device_calls.append("backup"),
+    )
+    monkeypatch.setattr(
+        configuration, "run_ansible_playbook",
+        lambda *args, **kwargs: device_calls.append("ansible"),
+    )
+    app = configuration_test_app(db)
+    with TestClient(app) as client:
+        response = client.get(
+            "/configuration/active-manual-restores",
+            params=[("target", "sw1"), ("target", "unknown")],
+            headers={"Authorization": "Bearer x"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == [{
+        "owner_change_id": change.change_id,
+        "rollback_id": rollback.rollback_id,
+        "state": "manual_restore_ready",
+        "overlapping_hostnames": ["sw1"],
+        "cancellable": True,
+    }]
+    assert device_calls == []
+    assert "config_payload" not in response.text
+    assert "encrypted_password" not in response.text
+
+
+def test_active_manual_restores_endpoint_empty_and_admin_only(db):
+    add_device(db)
+    app = FastAPI()
+    app.include_router(configuration.router)
+    app.dependency_overrides[get_db] = lambda: db
+    endpoint = "/configuration/active-manual-restores?target=sw1"
+    headers = {"Authorization": "Bearer x"}
+    with TestClient(app) as client:
+        assert client.get(endpoint).status_code == 401
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="viewer", role="viewer"
+        )
+        assert client.get(endpoint, headers=headers).status_code == 403
+        app.dependency_overrides[auth.get_current_user] = lambda: SimpleNamespace(
+            username="admin", role="admin"
+        )
+        response = client.get(endpoint, headers=headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_configuration_source_keeps_active_lock_context_separate_from_proposal():
+    source_path = configuration.__file__.replace(
+        "backend/routers/configuration.py",
+        "frontend/src/components/Configuration.jsx",
+    )
+    with open(source_path, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    assert "activeManualRestoreLocks" in source
+    invalidate_body = source.split("const invalidateSimulation = () => {", 1)[1].split(
+        "};", 1
+    )[0]
+    assert "setActiveManualRestoreLocks" not in invalidate_body
+    cancel_body = source.split("const cancelManualRestore = async (lock) => {", 1)[1].split(
+        "const handleGenerateConfig", 1
+    )[0]
+    assert "lock.owner_change_id" in cancel_body
+    assert "lock.rollback_id" in cancel_body
+    assert "setChangeId" not in cancel_body
+    assert "setSimulationStatus" not in cancel_body
+    assert "ACTIVE MANUAL RESTORE LOCK" in source
+    assert "activeManualRestoreLocks.map(lock" in source
+    assert "isPushLocked" in source
+    assert "disabled={isBusy || isPushLocked" in source
+    assert "disabled={isBusy || !canSimulate}" in source

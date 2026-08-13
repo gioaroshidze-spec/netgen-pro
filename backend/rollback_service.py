@@ -35,6 +35,10 @@ TERMINAL_ROLLBACK_FAILURE_STATES = {
     "manual_restore_verification_error",
 }
 SUCCESSFUL_ROLLBACK_STATES = {"manual_restore_verified"}
+MANUAL_RESTORE_CANCELLABLE_STATES = {
+    "manual_restore_required",
+    "manual_restore_ready",
+}
 
 
 class RollbackRejected(ValueError):
@@ -228,24 +232,26 @@ def reject_newer_overlapping_changes(db, change):
             )
 
 
-def reject_overlapping_active_rollbacks(db, change, exclude_rollback_id=None):
+def active_manual_restore_locks(db, target_devices, exclude_rollback_id=None):
+    """Return safe metadata for every active rollback overlapping the targets."""
     query = db.query(models.ConfigurationRollback).filter(
         models.ConfigurationRollback.status.in_(ACTIVE_ROLLBACK_STATES)
-    )
+    ).order_by(models.ConfigurationRollback.id.asc())
     if exclude_rollback_id is not None:
         query = query.filter(
             models.ConfigurationRollback.rollback_id != exclude_rollback_id
         )
     active_rollbacks = query.all()
     if not active_rollbacks:
-        return
+        return []
 
     active_change_ids = {item.change_id for item in active_rollbacks}
     active_changes = db.query(models.ConfigurationChange).filter(
         models.ConfigurationChange.change_id.in_(active_change_ids)
     ).all()
     changes_by_id = {item.change_id: item for item in active_changes}
-    requested_targets = set(change.target_devices or [])
+    requested_targets = set(target_devices or [])
+    locks = []
     for active in active_rollbacks:
         active_change = changes_by_id.get(active.change_id)
         if active_change is None:
@@ -254,11 +260,43 @@ def reject_overlapping_active_rollbacks(db, change, exclude_rollback_id=None):
             requested_targets.intersection(active_change.target_devices or [])
         )
         if overlap:
-            raise RollbackRejected(
-                "Another rollback is active for overlapping target device(s): "
-                + ", ".join(overlap)
-                + "."
-            )
+            locks.append({
+                "owner_change_id": active.change_id,
+                "rollback_id": active.rollback_id,
+                "state": active.status,
+                "overlapping_hostnames": overlap,
+                "cancellable": active.status in MANUAL_RESTORE_CANCELLABLE_STATES,
+            })
+    return locks
+
+
+def overlapping_active_rollback(db, target_devices, exclude_rollback_id=None):
+    """Return the first active rollback and only its overlapping targets."""
+    locks = active_manual_restore_locks(
+        db, target_devices, exclude_rollback_id=exclude_rollback_id
+    )
+    if not locks:
+        return None
+    lock = locks[0]
+    active = db.query(models.ConfigurationRollback).filter(
+        models.ConfigurationRollback.rollback_id == lock["rollback_id"]
+    ).one()
+    return active, lock["overlapping_hostnames"]
+
+
+def reject_overlapping_active_rollbacks(db, change, exclude_rollback_id=None):
+    conflict = overlapping_active_rollback(
+        db, change.target_devices, exclude_rollback_id=exclude_rollback_id
+    )
+    if conflict:
+        active, overlap = conflict
+        raise RollbackRejected(
+            "Active manual restore "
+            + active.rollback_id
+            + " is active for overlapping target device(s): "
+            + ", ".join(overlap)
+            + "."
+        )
 
 
 def _artifact_metadata(artifacts):
@@ -341,6 +379,70 @@ def authorize_rollback(
             "proposal_hash": change.proposal_hash,
             "state_transition": "none -> manual_restore_required",
             **handoff,
+        },
+    )
+    return rollback
+
+
+def cancel_manual_restore(
+    db,
+    change,
+    rollback,
+    requested_by,
+    reason,
+    audit_logger=log_event,
+):
+    """Cancel a stable manual-restore wait without performing device I/O."""
+    if rollback.change_id != change.change_id:
+        raise RollbackRejected("Rollback authorization does not belong to this change.")
+    reason = reason.strip()
+    if not 10 <= len(reason) <= 1000:
+        raise RollbackRejected(
+            "Cancellation reason must be between 10 and 1000 characters."
+        )
+    previous_state = rollback.status
+    if previous_state not in MANUAL_RESTORE_CANCELLABLE_STATES:
+        raise RollbackRejected(
+            "Manual restore cancellation is valid only from "
+            "manual_restore_required or manual_restore_ready."
+        )
+
+    claimed = db.query(models.ConfigurationRollback).filter(
+        models.ConfigurationRollback.id == rollback.id,
+        models.ConfigurationRollback.status == previous_state,
+    ).update(
+        {
+            models.ConfigurationRollback.status: "manual_restore_cancelled",
+            models.ConfigurationRollback.completed_at: datetime.now(timezone.utc),
+            models.ConfigurationRollback.error: None,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+    if claimed != 1:
+        raise RollbackRejected(
+            "Manual restore state changed before cancellation could be completed."
+        )
+    db.refresh(rollback)
+    audit_logger(
+        db=db,
+        event_type="Configuration",
+        severity="WARNING",
+        author=requested_by,
+        target_devices=change.target_devices,
+        details={
+            "action": "Manual Restore Cancelled",
+            "change_id": change.change_id,
+            "rollback_id": rollback.rollback_id,
+            "actor": requested_by,
+            "reason": reason,
+            "previous_state": previous_state,
+            "state_transition": (
+                f"{previous_state} -> manual_restore_cancelled"
+            ),
+            "target_devices": list(change.target_devices),
+            "device_contact_performed": False,
+            "device_configuration_changed": False,
         },
     )
     return rollback

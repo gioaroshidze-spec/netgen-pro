@@ -160,6 +160,12 @@ class ManualRestoreActionRequest(BaseModel):
     rollback_id: str
 
 
+class ManualRestoreCancellationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rollback_id: str
+    reason: str
+
+
 # --- EVENT LOG SCHEMAS ---
 class EventLogCreate(BaseModel):
     event_type: str
