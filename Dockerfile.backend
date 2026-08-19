@@ -1,11 +1,22 @@
 # Use an official Python runtime as a parent image
 FROM python:3.10-slim
 
+ARG VNMS_VERSION=0.0.0-dev
+ARG VNMS_BUILD_SHA=unknown
+ARG VNMS_BUILD_TIME=unknown
+LABEL org.opencontainers.image.title="VNMS Backend" \
+      org.opencontainers.image.version="$VNMS_VERSION" \
+      org.opencontainers.image.revision="$VNMS_BUILD_SHA" \
+      org.opencontainers.image.created="$VNMS_BUILD_TIME"
+
 # Set environment variables for non-interactive installs and pipx
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIPX_HOME=/opt/pipx
 ENV PIPX_BIN_DIR=/usr/local/bin
 ENV PATH="/usr/local/bin:$PATH"
+ENV VNMS_VERSION="$VNMS_VERSION"
+ENV VNMS_BUILD_SHA="$VNMS_BUILD_SHA"
+ENV VNMS_BUILD_TIME="$VNMS_BUILD_TIME"
 
 # Install system dependencies required for SSH, Ansible, and ping
 RUN apt-get update && apt-get install -y \
@@ -36,11 +47,20 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the backend source code
-# This bakes the code into the image, preventing meddling!
+# Runtime hosts do not need the repository; image contents remain inspectable by Docker administrators.
 COPY backend/ .
+
+# Runtime /version reads this image-owned file. Production host env files only
+# select VNMS_RELEASE_TAG and cannot override the metadata reported by the API.
+RUN printf '{"version":"%s","build_sha":"%s","build_time":"%s"}\n' \
+    "$VNMS_VERSION" "$VNMS_BUILD_SHA" "$VNMS_BUILD_TIME" \
+    > /app/vnms_build_metadata.json
 
 # Expose the FastAPI port
 EXPOSE 8000
 
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=12 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()" || exit 1
+
 # Command to run the Uvicorn server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--log-level", "warning"]

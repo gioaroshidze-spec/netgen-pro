@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -15,6 +14,7 @@ from netmiko import ConnectHandler
 from routers.auth import get_current_admin, get_current_user
 from ansible_engine import normalize_ansible_payload, run_ansible_playbook
 from routers.auth import decrypt_secret
+from runtime_config import ConfigurationError, ai_provider_config
 from logger import log_event
 from backup_service import create_preconfiguration_backups
 from change_control import proposal_hash
@@ -180,7 +180,11 @@ def stream_ansible_and_log(ansible_stream, db: Session, prompt: str, ai_config_d
 def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="Prompt cannot be empty.")
-    
+    try:
+        model_name, api_key = ai_provider_config()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     target_hostnames = request.switches + request.routers
     devices = []
     if target_hostnames:
@@ -256,9 +260,9 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         user_prompt += f"\n\nHere is the LIVE running configuration for the target devices. Analyze this to ensure your generated commands don't conflict with existing setups:\n{device_context}"
 
     try:
-        model_name = os.getenv("ACTIVE_AI_MODEL", "claude-opus-4-7") 
         response = completion(
             model=model_name,
+            api_key=api_key,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
         )
         
@@ -272,8 +276,10 @@ def generate_configuration(request: schemas.AIConfigGenerate, db: Session = Depe
         except json.JSONDecodeError:
             raise HTTPException(status_code=500, detail="AI generated invalid JSON format. Please try generating again.")
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI Engine Error: Check console for details. {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="AI provider request failed.") from exc
 
 
 @router.post("/configuration/simulate")

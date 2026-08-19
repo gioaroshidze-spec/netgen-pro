@@ -3,10 +3,11 @@ from sqlalchemy.orm import Session
 from database import get_db
 import models, schemas
 import json
-import os
+import logging
 from litellm import completion
 from logger import log_event
 from routers.auth import get_current_user
+from runtime_config import ConfigurationError, ai_provider_config
 
 router = APIRouter(tags=["Templates"])
 
@@ -17,12 +18,17 @@ def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_
     """
     # 1. Ask AI to generate a description
     try:
-        model_name = os.getenv("ACTIVE_AI_MODEL", "claude-opus-4-7")
+        model_name, api_key = ai_provider_config()
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    try:
         system_prompt = "You are a senior network architect. Summarize the following JSON network configuration in exactly ONE clear, concise sentence. Focus on the core purpose (e.g., 'Configures VLANs 10 and 20 on edge switches.'). Do not include introductory text."
         user_prompt = f"Summarize this JSON config:\n{json.dumps(template.payload, indent=2)}"
 
         response = completion(
             model=model_name,
+            api_key=api_key,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -34,8 +40,8 @@ def create_template(template: schemas.TemplateCreate, db: Session = Depends(get_
         if ai_description.startswith('"') and ai_description.endswith('"'):
             ai_description = ai_description[1:-1]
     
-    except Exception as e:
-        print(f"Failed to generate AI description: {e}")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("AI description generation failed: %s", type(exc).__name__)
         ai_description = "Custom network configuration template."
     
     # 2. Save to Database

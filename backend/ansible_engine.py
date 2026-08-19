@@ -3,6 +3,8 @@ import subprocess
 import json
 import os
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import yaml
 
 # --- INITIALIZE DEDICATED ANSIBLE LOGGER ---
@@ -13,7 +15,10 @@ ansible_logger.propagate = False
 
 # Ensure we don't attach duplicate handlers if the module reloads
 if not ansible_logger.handlers:
-    ansible_handler = logging.FileHandler("ansible.log")
+    configured_log_dir = os.getenv("VNMS_LOG_DIR")
+    ansible_log_path = Path(configured_log_dir) / "ansible" / "ansible.log" if configured_log_dir else Path("ansible.log")
+    ansible_log_path.parent.mkdir(parents=True, exist_ok=True)
+    ansible_handler = RotatingFileHandler(ansible_log_path, maxBytes=5*1024*1024, backupCount=3)
     ansible_formatter = logging.Formatter('%(asctime)s - [ANSIBLE] - %(message)s')
     ansible_handler.setFormatter(ansible_formatter)
     ansible_logger.addHandler(ansible_handler)

@@ -5,9 +5,12 @@ import models
 from database import engine, SessionLocal
 from contextlib import asynccontextmanager
 import os
+from pathlib import Path
 import bcrypt
 import logging
 from logging.handlers import RotatingFileHandler
+from runtime_config import is_production, log_dir
+from routers import system as system_router
 
 # Import our routers and scheduler
 from routers import devices, maintenance, compare, configuration, logs, templates, cli, auth, jobs, topology, organization
@@ -16,7 +19,10 @@ from scheduler_engine import start_scheduler, scheduler # <-- NEW
 # --- INITIALIZE SYSTEM FILE LOGGER ---
 # This creates a log file that maxes out at 5MB, keeping 3 backups, so it never fills the hard drive.
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-log_file_handler = RotatingFileHandler('backend_app.log', maxBytes=5*1024*1024, backupCount=3)
+configured_log_dir = log_dir()
+backend_log_path = (configured_log_dir / "backend" / "backend_app.log") if configured_log_dir else Path("backend_app.log")
+backend_log_path.parent.mkdir(parents=True, exist_ok=True)
+log_file_handler = RotatingFileHandler(backend_log_path, maxBytes=5*1024*1024, backupCount=3)
 log_file_handler.setFormatter(log_formatter)
 
 # Attach to the root logger
@@ -25,7 +31,8 @@ root_logger.setLevel(logging.INFO)
 root_logger.addHandler(log_file_handler)
 
 # Initialize Database Engine
-models.Base.metadata.create_all(bind=engine)
+if not is_production():
+    models.Base.metadata.create_all(bind=engine)
 
 # --- NEW: LIFESPAN MANAGER (Starts and stops background processes) ---
 @asynccontextmanager
@@ -34,10 +41,21 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     yield
     print("Shutting down VNMS Background Scheduler...")
-    scheduler.shutdown()
+    if scheduler.running:
+        scheduler.shutdown()
 
 # Initialize FastAPI App
 app = FastAPI(title="VNMS Central API", version="1.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def persist_unhandled_exception(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        logging.getLogger("vnms.backend").exception(
+            "Unhandled backend exception for %s %s", request.method, request.url.path
+        )
+        raise
 
 # --- THE SURGICAL INCISION: Dynamic CORS Origins ---
 # Pulls a comma-separated list from the environment, falling back to local dev ports AND docker ports.
@@ -58,9 +76,9 @@ app.add_middleware(
 
 # --- SECURED: CREATE DEFAULT ADMIN USER ON STARTUP ---
 # Now uses native cryptographic byte compilation to avoid passlib system crashes
-db = SessionLocal()
-admin_exists = db.query(models.User).filter(models.User.username == "admin").first()
-if not admin_exists:
+db = SessionLocal() if not is_production() else None
+admin_exists = db.query(models.User).filter(models.User.username == "admin").first() if db else True
+if db and not admin_exists:
     print("Creating default admin user...")
     
     # Secure native salt generation and hashing execution
@@ -75,9 +93,11 @@ if not admin_exists:
     )
     db.add(default_admin)
     db.commit()
-db.close()
+if db:
+    db.close()
 
 # --- REGISTER ALL ROUTERS ---
+app.include_router(system_router.router)
 app.include_router(jobs.router)
 app.include_router(auth.router)
 app.include_router(devices.router)

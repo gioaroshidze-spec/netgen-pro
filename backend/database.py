@@ -1,8 +1,9 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
+from runtime_config import database_url
 
 # This creates a local SQLite database file named netgen.db
-SQLALCHEMY_DATABASE_URL = "sqlite:///./netgen.db"
+SQLALCHEMY_DATABASE_URL = database_url()
 
 # The "check_same_thread" argument is specifically required for SQLite in Fast API
 engine = create_engine(

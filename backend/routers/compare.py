@@ -9,7 +9,7 @@ from routers.auth import get_current_user
 from config_compare import normalize_config_for_comparison
 
 router = APIRouter(tags=["Archive & Compare"])
-ARCHIVE_DIR = "archive"
+ARCHIVE_DIR = os.getenv("VNMS_ARCHIVE_DIR", "archive")
 
 @router.get("/archive/files")
 def get_archive_files(db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):

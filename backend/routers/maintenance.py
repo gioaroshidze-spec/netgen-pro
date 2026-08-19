@@ -21,7 +21,7 @@ from connection_utils import get_netmiko_params
 load_dotenv()
 
 router = APIRouter(tags=["Maintenance Operations"])
-ARCHIVE_DIR = "archive"
+ARCHIVE_DIR = os.getenv("VNMS_ARCHIVE_DIR", "archive")
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 # --- HELPER FOR RICH LOGGING ---

@@ -22,7 +22,7 @@ from connection_utils import get_netmiko_params
 
 # Initialize the APScheduler
 scheduler = BackgroundScheduler()
-ARCHIVE_DIR = "archive"
+ARCHIVE_DIR = os.getenv("VNMS_ARCHIVE_DIR", "archive")
 
 def get_device_meta(device: models.NetworkDevice):
     """Helper to format device data cleanly for the Event Logs UI."""

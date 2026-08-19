@@ -29,3 +29,5 @@ backend/ansible.log
 backend/backend_app.log
 
 .env
+# Generated deployment release bundles
+deploy/vnms-deployment-*.tar.gz

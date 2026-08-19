@@ -1,29 +1,25 @@
-# Git and Environment
 .git
 .gitignore
 .env
-
-# Python Virtual Environments & Cache
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Frontend Node Modules (Docker installs its own inside the container)
-frontend/node_modules/
-frontend/dist/
-
-# Local Databases (Clients need their own fresh DBs)
-backend/netgen.db
-backend/netgen.db-journal
-
-# Local Telemetry & Archives (Clients generate their own logs)
-backend/*.log
-backend/ansible.log
-backend/backend_app.log
-backend/archive/
-
-# macOS/Windows system files
+**/.env
+**/.env.*
+!**/.env.example
+backend/venv
+backend/__pycache__
+**/__pycache__
+**/*.pyc
+backend/.pytest_cache
+backend/*.db
+backend/*.log*
+backend/archive
+backend/tests
+frontend/node_modules
+frontend/dist
+deploy/*.tar.gz
+*.pem
+*.key
+id_rsa*
+PROJECT_TREE.txt
+PRE_PHASE_*.md
 .DS_Store
 Thumbs.db

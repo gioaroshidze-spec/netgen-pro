@@ -6,6 +6,7 @@ from pydantic import BaseModel
 import jwt
 import os
 import secrets
+import logging
 import bcrypt  # NATIVE SOLUTION: Replaces unmaintained passlib wrapper
 from cryptography.fernet import Fernet 
 from database import get_db
@@ -14,15 +15,27 @@ import schemas
 
 # --- IMPORT THE LOGGER ---
 from logger import log_event
+from runtime_config import ConfigurationError, read_secret
 
 # --- SECURED CONFIGURATION ---
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", secrets.token_urlsafe(32)) 
+LOGGER = logging.getLogger(__name__)
+SECRET_KEY = read_secret("JWT_SECRET_KEY", required_in_production=True)
+if not SECRET_KEY:
+    SECRET_KEY = secrets.token_urlsafe(32)
+    LOGGER.warning("JWT_SECRET_KEY is not configured; using an ephemeral development key. Sessions will not survive a restart.")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 1440 
 
 # --- AES-256 DEVICE ENCRYPTION ENGINE ---
-ENCRYPTION_KEY = os.getenv("VNMS_ENCRYPTION_KEY", "uO1v_Zt5pU7N2F_cO2J-jX9kQ4vT1aL8wE5mY0zP_B8=")
-cipher_suite = Fernet(ENCRYPTION_KEY)
+_LEGACY_DEVELOPMENT_ENCRYPTION_KEY = "uO1v_Zt5pU7N2F_cO2J-jX9kQ4vT1aL8wE5mY0zP_B8="
+ENCRYPTION_KEY = read_secret("VNMS_ENCRYPTION_KEY", required_in_production=True)
+if not ENCRYPTION_KEY:
+    ENCRYPTION_KEY = _LEGACY_DEVELOPMENT_ENCRYPTION_KEY
+    LOGGER.warning("VNMS_ENCRYPTION_KEY is not configured; using the deprecated legacy development compatibility key. Production refuses this fallback.")
+try:
+    cipher_suite = Fernet(ENCRYPTION_KEY)
+except (TypeError, ValueError) as exc:
+    raise ConfigurationError("VNMS_ENCRYPTION_KEY is not a valid Fernet key.") from exc
 
 def encrypt_secret(plain_text: str):
     if not plain_text: return None

@@ -1,0 +1,46 @@
+services:
+  backend:
+    image: ${VNMS_REGISTRY:?Set VNMS_REGISTRY}/${VNMS_IMAGE_NAMESPACE:?Set VNMS_IMAGE_NAMESPACE}/vnms-backend:${VNMS_RELEASE_TAG:?Set VNMS_RELEASE_TAG}
+    restart: unless-stopped
+    env_file:
+      - ${VNMS_ENV_FILE:-/etc/vnms/vnms.env}
+    environment:
+      VNMS_ENV: production
+      VNMS_DATABASE_URL: sqlite:////var/lib/vnms/netgen.db
+      VNMS_ARCHIVE_DIR: /var/lib/vnms/archive
+      VNMS_LOG_DIR: /var/log/vnms
+      VNMS_FRONTEND_HEALTH_URL: http://frontend/healthz
+      JWT_SECRET_KEY_FILE: /run/vnms-secrets/jwt_secret
+      VNMS_ENCRYPTION_KEY_FILE: /run/vnms-secrets/encryption_key
+      VNMS_BOOTSTRAP_PASSWORD_FILE: /run/vnms-secrets/bootstrap_admin
+      VNMS_AI_API_KEY_FILE: /run/vnms-secrets/ai_api_key
+    volumes:
+      - /var/lib/vnms:/var/lib/vnms
+      - /var/log/vnms/backend:/var/log/vnms/backend
+      - /var/log/vnms/ansible:/var/log/vnms/ansible
+      - /var/log/vnms/frontend:/var/log/vnms/frontend:ro
+      - /etc/vnms/secrets:/run/vnms-secrets:ro
+      - /var/log/vnms/update.log:/var/log/vnms/update.log:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    image: ${VNMS_REGISTRY:?Set VNMS_REGISTRY}/${VNMS_IMAGE_NAMESPACE:?Set VNMS_IMAGE_NAMESPACE}/vnms-frontend:${VNMS_RELEASE_TAG:?Set VNMS_RELEASE_TAG}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${VNMS_HTTP_BIND:-0.0.0.0}:${VNMS_HTTP_PORT:-80}:80"
+    volumes:
+      - /var/log/vnms/frontend:/var/log/vnms/frontend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 5s

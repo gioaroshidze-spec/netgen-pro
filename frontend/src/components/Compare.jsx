@@ -37,7 +37,7 @@ export default function Compare({ archiveFiles }) {
     if (comp2Mode === 'archive') formData.append('archive_file2', comp2File);
     if (comp2Mode === 'upload') formData.append('upload_file2', comp2Upload);
 
-    fetch('http://127.0.0.1:8000/compare/', {
+    fetch(`${API_BASE}/compare/`, {
       method: 'POST',
       headers: { 
         'Authorization': `Bearer ${localStorage.getItem('token')}` // <-- TOKEN INJECTED

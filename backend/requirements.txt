@@ -9,6 +9,7 @@ python-multipart>=0.0.9
 
 # Database ORM Layer
 sqlalchemy>=2.0.28
+alembic>=1.13.1,<2
 
 # Task Scheduling & Telemetry Loops
 apscheduler>=3.10.4

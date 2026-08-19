@@ -3,7 +3,7 @@ import time
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import cast, String
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import get_db, SessionLocal
 import models, schemas
 from typing import Optional, List
@@ -14,6 +14,7 @@ import zipfile
 import io
 from fastapi.responses import StreamingResponse
 from logger import log_event
+from support_bundle import build_support_bundle
 
 router = APIRouter(tags=["Audit Logs"])
 
@@ -29,9 +30,13 @@ class FrontendErrorLog(BaseModel):
     time: str
     error: str
     stack: Optional[str] = None
+    type: Optional[str] = None
+    method: Optional[str] = None
+    path: Optional[str] = None
+    status: Optional[int] = None
 
 class SupportBundleRequest(BaseModel):
-    frontend_logs: List[FrontendErrorLog] = []
+    frontend_logs: List[FrontendErrorLog] = Field(default_factory=list, max_length=100)
 
 @router.get("/logs/retention")
 def get_retention_policy(current_user: models.User = Depends(get_current_user)):
@@ -158,40 +163,8 @@ def generate_support_bundle(
     current_user: models.User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
-    """
-    Zips up the backend, frontend, and ansible logs for diagnostic support.
-    Restricted to Admin users.
-    """
-    zip_buffer = io.BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-        
-        # 1. ADD THE BACKEND LOG FILE
-        if os.path.exists("backend_app.log"):
-            zip_file.write("backend_app.log", arcname="backend.log")
-        else:
-            zip_file.writestr("backend.log", "No backend log file generated yet.")
-
-        # 2. ADD THE ANSIBLE LOG FILE
-        if os.path.exists("ansible.log"):
-            zip_file.write("ansible.log", arcname="ansible.log")
-        else:
-            zip_file.writestr("ansible.log", "No ansible log file generated yet.")
-
-        # 3. CONSTRUCT & ADD THE FRONTEND LOG FILE ON THE FLY
-        frontend_log_content = "=== VNMS Frontend Error Logs ===\n\n"
-        if not request.frontend_logs:
-            frontend_log_content += "No frontend crashes recorded in local storage."
-        else:
-            for log in request.frontend_logs:
-                frontend_log_content += f"[{log.time}] ERROR: {log.error}\n"
-                if log.stack:
-                    frontend_log_content += f"STACK TRACE:\n{log.stack}\n"
-                frontend_log_content += "-" * 60 + "\n"
-        
-        zip_file.writestr("frontend.log", frontend_log_content)
-            
-    zip_buffer.seek(0)
+    """Generate a bounded, redacted diagnostic archive. Admin only."""
+    bundle = build_support_bundle([item.model_dump(exclude_none=True) for item in request.frontend_logs])
 
     # Log that the admin generated a bundle
     log_event(
@@ -204,7 +177,7 @@ def generate_support_bundle(
     )
 
     return StreamingResponse(
-        zip_buffer, 
+        io.BytesIO(bundle),
         media_type="application/x-zip-compressed",
         headers={"Content-Disposition": "attachment; filename=VNMS_Diagnostic_Bundle.zip"}
     )

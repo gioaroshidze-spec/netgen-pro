@@ -5,7 +5,7 @@ import '@xterm/xterm/css/xterm.css';
 import { CanvasAddon } from '@xterm/addon-canvas';
 
 // --- INDIVIDUAL TERMINAL COMPONENT ---
-export function TerminalWindow({ device, isActive, onClose }) {
+export function TerminalWindow({ device, isActive }) {
   const terminalRef = useRef(null);
   const termInstance = useRef(null);
   const fitAddonInstance = useRef(null);
@@ -50,7 +50,8 @@ export function TerminalWindow({ device, isActive, onClose }) {
         const token = localStorage.getItem('token');
         
         // --- DYNAMIC WEBSOCKET ROUTING ---
-        const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8000';
+        const defaultWsBase = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+        const WS_BASE = import.meta.env.VITE_WS_URL || defaultWsBase;
         const socket = new WebSocket(`${WS_BASE}/ws/cli/${device.id}?token=${token}`);
         
         ws.current = socket;
@@ -200,7 +201,6 @@ export default function CLI({ devices }) {
                 key={session.id} 
                 device={session} 
                 isActive={activeTabId === session.id} 
-                onClose={() => closeTerminal({stopPropagation: ()=>{}}, session.id)} 
               />
             ))
           )}
